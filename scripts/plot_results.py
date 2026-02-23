@@ -16,6 +16,7 @@ from energy_inference.plotting import (
     infer_sweep_column,
     list_run_csv_files,
     load_results_csv,
+    plot_latency_and_fps,
     plot_sweep,
     prepare_plot_dataframe,
     save_figure,
@@ -39,6 +40,11 @@ def main() -> None:
         default="latency_ms",
         help="Metric column to plot on y-axis (e.g., latency_ms, fps, flops_total).",
     )
+    parser.add_argument(
+        "--plot-latency-fps",
+        action="store_true",
+        help="Plot latency_ms and fps together using dual y-axes.",
+    )
     parser.add_argument("--output", type=str, default=None, help="Output image path.")
     parser.add_argument(
         "--output-dir",
@@ -60,15 +66,33 @@ def main() -> None:
     if args.input:
         df = load_results_csv(args.input)
         _, x_column = infer_sweep_column(df)
-        plot_df = prepare_plot_dataframe(
-            df,
-            x_column=x_column,
-            y_column=args.y,
-            include_failed=args.include_failed,
-        )
-        fig, _ = plot_sweep(plot_df, x_column=x_column, y_column=args.y, title=args.title)
-
-        out_path = args.output or default_plot_path(args.input, args.y)
+        if args.plot_latency_fps:
+            latency_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="latency_ms",
+                include_failed=args.include_failed,
+            )
+            fps_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="fps",
+                include_failed=args.include_failed,
+            )
+            plot_df = latency_df.merge(fps_df, on=x_column, how="inner")
+            if plot_df.empty:
+                raise ValueError("No overlapping rows found for latency_ms and fps.")
+            fig, _ = plot_latency_and_fps(plot_df, x_column=x_column, title=args.title)
+            out_path = args.output or default_plot_path(args.input, "latency_fps")
+        else:
+            plot_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column=args.y,
+                include_failed=args.include_failed,
+            )
+            fig, _ = plot_sweep(plot_df, x_column=x_column, y_column=args.y, title=args.title)
+            out_path = args.output or default_plot_path(args.input, args.y)
         saved_to = save_figure(fig, out_path, dpi=args.dpi)
         print(f"Plot saved to: {saved_to}")
 
@@ -84,15 +108,35 @@ def main() -> None:
     for csv_path in csv_files:
         df = load_results_csv(csv_path)
         _, x_column = infer_sweep_column(df)
-        plot_df = prepare_plot_dataframe(
-            df,
-            x_column=x_column,
-            y_column=args.y,
-            include_failed=args.include_failed,
-        )
-        fig, _ = plot_sweep(plot_df, x_column=x_column, y_column=args.y, title=args.title)
+        if args.plot_latency_fps:
+            latency_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="latency_ms",
+                include_failed=args.include_failed,
+            )
+            fps_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="fps",
+                include_failed=args.include_failed,
+            )
+            plot_df = latency_df.merge(fps_df, on=x_column, how="inner")
+            if plot_df.empty:
+                raise ValueError("No overlapping rows found for latency_ms and fps.")
+            fig, _ = plot_latency_and_fps(plot_df, x_column=x_column, title=args.title)
+            suffix = "latency_fps"
+        else:
+            plot_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column=args.y,
+                include_failed=args.include_failed,
+            )
+            fig, _ = plot_sweep(plot_df, x_column=x_column, y_column=args.y, title=args.title)
+            suffix = args.y
 
-        out_path = str(Path(run_plot_dir) / f"{Path(csv_path).stem}_{args.y}.png")
+        out_path = str(Path(run_plot_dir) / f"{Path(csv_path).stem}_{suffix}.png")
         saved_to = save_figure(fig, out_path, dpi=args.dpi)
         print(f"Plot saved to: {saved_to}")
 

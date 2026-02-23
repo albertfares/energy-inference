@@ -127,8 +127,10 @@ This will:
   - auto-detects x-axis from `sweep_param`
   - example:
     - `python scripts/plot_results.py --input results/runs/<your_run>.csv --y latency_ms`
+    - `python scripts/plot_results.py --input results/runs/<your_run>.csv --plot-latency-fps`
   - run-group plotting in one command:
     - `python scripts/plot_results.py --run-dir results/runs/<group_dir> --y latency_ms`
+    - `python scripts/plot_results.py --run-dir results/runs/<group_dir> --plot-latency-fps`
 - `scripts/run_experiments_csv.py`
   - use when you want to run many experiments from a CSV template
   - example:

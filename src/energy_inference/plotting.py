@@ -97,6 +97,60 @@ def plot_sweep(
     return fig, ax
 
 
+def plot_latency_and_fps(
+    df: pd.DataFrame,
+    *,
+    x_column: str,
+    title: str | None = None,
+) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
+    """Build a dual-axis plot with latency_ms and fps."""
+    required_columns = {x_column, "latency_ms", "fps"}
+    missing = sorted(required_columns - set(df.columns))
+    if missing:
+        raise ValueError(
+            "DataFrame is missing required columns for dual plot: "
+            f"{', '.join(missing)}"
+        )
+
+    fig, ax_left = plt.subplots(figsize=(8, 5))
+    ax_right = ax_left.twinx()
+
+    ax_left.plot(
+        df[x_column],
+        df["latency_ms"],
+        marker="o",
+        color="tab:blue",
+        label="latency_ms",
+    )
+    ax_right.plot(
+        df[x_column],
+        df["fps"],
+        marker="s",
+        color="tab:orange",
+        label="fps",
+    )
+
+    ax_left.set_xlabel(x_column)
+    ax_left.set_ylabel("latency_ms", color="tab:blue")
+    ax_right.set_ylabel("fps", color="tab:orange")
+    ax_left.tick_params(axis="y", labelcolor="tab:blue")
+    ax_right.tick_params(axis="y", labelcolor="tab:orange")
+    ax_left.grid(True, alpha=0.3)
+
+    if title:
+        ax_left.set_title(title)
+    else:
+        ax_left.set_title(f"latency_ms and fps vs {x_column}")
+
+    # Put one combined legend on the left axis.
+    left_handles, left_labels = ax_left.get_legend_handles_labels()
+    right_handles, right_labels = ax_right.get_legend_handles_labels()
+    ax_left.legend(left_handles + right_handles, left_labels + right_labels)
+
+    fig.tight_layout()
+    return fig, (ax_left, ax_right)
+
+
 def default_plot_path(csv_path: str, y_column: str) -> str:
     """Generate default output image path for a CSV run file."""
     src = Path(csv_path)
