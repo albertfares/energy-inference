@@ -1,0 +1,5 @@
+enabled,mode,device,sweep,experiment,notes,model,batch,resolution,precision,backend,iters,warmup,models,batches,resolutions,out,append,run_id
+1,full,cpu,model,cpu_model_sweep_baseline,"baseline model sweep",,1,224,fp32,eager,200,30,"resnet18,resnet50",,,,
+1,full,cpu,batch,cpu_resnet18_batch_sweep,"batch scaling",resnet18,1,224,fp32,eager,200,30,,"1,2,4",,,
+1,full,cpu,resolution,cpu_resnet18_resolution_sweep,"resolution scaling",resnet18,1,224,fp32,eager,200,30,,,"160,192,224",,
+0,full,cuda,batch,gpu_batch_sweep_template,"set enabled=1 when GPU ready",resnet18,1,224,fp16,eager,200,30,,"1,2,4,8,16,32",,,,

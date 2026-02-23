@@ -1,0 +1,4 @@
+enabled,mode,device,sweep,experiment,notes,model,batch,resolution,precision,backend,iters,warmup,models,batches,resolutions,out,append,run_id
+1,full,cuda,batch,jetson_orin_resnet18_batch_sweep,"AGX Orin 64GB baseline batch sweep",resnet18,1,224,fp16,eager,200,30,,"1,2,4,8,16",,,,
+1,full,cuda,resolution,jetson_orin_resnet18_resolution_sweep,"AGX Orin 64GB baseline resolution sweep",resnet18,1,224,fp16,eager,200,30,,,"160,192,224,256,320,384",,
+0,full,cuda,model,jetson_orin_model_sweep,"Enable after verifying stable settings",,1,224,fp16,eager,200,30,"resnet18,resnet50",,,,
