@@ -65,6 +65,37 @@ Or run commands without activating:
 conda run -n energy-inference python scripts/run_full_cpu.py --help
 ```
 
+## Jetson (JP6.2) PyTorch setup
+
+On Jetson/aarch64, `pip install -r requirements.txt` intentionally skips
+`torch`/`torchvision`. Install Jetson-compatible PyTorch wheels after that:
+
+```bash
+conda activate energy-inference
+
+# Optional cleanup if you attempted generic PyPI torch installs before
+python -m pip uninstall -y torch torchvision torchaudio
+
+# System dependency
+sudo apt-get update
+sudo apt-get install -y libopenblas-dev
+
+# Required by newer NVIDIA PyTorch builds
+wget raw.githubusercontent.com/pytorch/pytorch/5c6af2b583709f6176898c017424dc9981023c28/.ci/docker/common/install_cusparselt.sh
+export CUDA_VERSION=12.6
+bash ./install_cusparselt.sh
+
+# Install JetPack 6.2 compatible wheels
+python -m pip install --upgrade pip
+python -m pip install --no-cache-dir --extra-index-url https://pypi.jetson-ai-lab.dev/jp6/cu126 torch torchvision
+```
+
+Verify:
+
+```bash
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
+```
+
 ## Minimal quick start
 
 Run one merged sweep (recommended default):

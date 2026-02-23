@@ -1,5 +1,9 @@
-torch
-torchvision
+# PyTorch packages:
+# - On x86_64: install from PyPI via these lines.
+# - On Jetson (aarch64): these are skipped; install torch/torchvision
+#   separately using JetPack-compatible NVIDIA/Jetson wheels.
+torch; platform_machine != "aarch64"
+torchvision; platform_machine != "aarch64"
 numpy
 pandas
 matplotlib
