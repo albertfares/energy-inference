@@ -270,10 +270,12 @@ def run_cpu_sweep(
     
     sampler = None
     if enable_energy and mode in ("bench", "full"):
+        power_csv_path = Path(out_path.replace(".csv", "_power_trace.csv"))
+        power_csv_path.parent.mkdir(parents=True, exist_ok=True)
         sampler = INA3221Sampler(
             exe_candidate="src/energy_inference/tools/sample_ina3221",
             hz=1000,
-            power_csv=out_path.replace(".csv", "_power_trace.csv"),
+            power_csv=str(power_csv_path),
             hw="all"
         )
 
