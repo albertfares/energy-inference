@@ -30,6 +30,7 @@ class ExperimentConfig:
     models: list[str] | None = None
     batches: list[int] | None = None
     resolutions: list[int] | None = None
+    enable_energy: bool = False
 
 
 def _parse_bool(value: str | None, default: bool = False) -> bool:
@@ -101,6 +102,7 @@ def _build_config_from_row(row: dict[str, str]) -> ExperimentConfig:
         raise ValueError(
             f"Invalid sweep '{cfg.sweep}'. Expected one of: {sorted(VALID_SWEEPS)}"
         )
+    cfg.enable_energy = _parse_bool(row.get("enable_energy"), cfg.enable_energy)
 
     default_models = ["resnet18", "resnet50"]
     default_batches = [1, 2, 4, 8]
@@ -203,6 +205,7 @@ def run_experiments_from_csv(csv_path: str) -> tuple[str, list[tuple[int, str, s
             models=cfg.models or ["resnet18", "resnet50"],
             batches=cfg.batches or [1, 2, 4, 8],
             resolutions=cfg.resolutions or [224, 320, 384],
+            enable_energy=cfg.enable_energy,
         )
         completed.append((row_number, run_id, out_path))
 
