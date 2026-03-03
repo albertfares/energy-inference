@@ -10,6 +10,7 @@ from energy_inference.benchmarking import bench_once
 from energy_inference.features import compute_flops, count_parameters, infer_model_family
 from energy_inference.io_utils import append_csv_row
 from energy_inference.models import get_model
+from energy_inference.tools.INA3221Sampler import INA3221Sampler
 
 RunMode = Literal["bench", "features", "full"]
 
@@ -28,6 +29,9 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "warmup",
         "latency_ms",
         "fps",
+        "energy_cpu_J",
+        "energy_gpu_J",
+        "energy_io_J",
     ],
     "features": [
         "run_id",
@@ -70,6 +74,9 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "unsupported_ops_count",
         "latency_ms",
         "fps",
+        "energy_cpu_J",
+        "energy_gpu_J",
+        "energy_io_J",
         "status",
         "error_msg",
     ],
@@ -231,6 +238,7 @@ def run_cpu_sweep(
     models: list[str],
     batches: list[int],
     resolutions: list[int],
+    enable_energy: bool = False,
 ) -> tuple[str, str]:
     torch_device = torch.device(device)
     if torch_device.type == "cuda" and not torch.cuda.is_available():
@@ -259,6 +267,15 @@ def run_cpu_sweep(
     desc_prefix = DESC_PREFIX_BY_MODE[mode]
 
     model_cache: dict[str, torch.nn.Module] = {}
+    
+    sampler = None
+    if enable_energy and mode in ("bench", "full"):
+        sampler = INA3221Sampler(
+            exe_candidate="src/energy_inference/tools/sample_ina3221",
+            hz=1000,
+            power_csv=out_path.replace(".csv", "_power_trace.csv"),
+            hw="all"
+        )
 
     for value in tqdm(sweep_values, desc=f"{desc_prefix} {sweep}", unit="cfg"):
         model_name, curr_batch, curr_resolution = _resolve_run_values(
@@ -285,19 +302,23 @@ def run_cpu_sweep(
         )
 
         if mode == "bench":
-            latency_ms, fps = bench_once(
+            latency_ms, fps, energy_dict = bench_once(
                 model=curr_model,
                 batch=curr_batch,
                 resolution=curr_resolution,
                 iters=iters,
                 warmup=warmup,
                 device=torch_device,
+                sampler=sampler,
             )
             row = base_row | {
                 "iters": iters,
                 "warmup": warmup,
                 "latency_ms": round(latency_ms, 4),
                 "fps": round(fps, 4),
+                "energy_cpu_J": energy_dict.get("cpu", ""),
+                "energy_gpu_J": energy_dict.get("gpu", ""),
+                "energy_io_J": energy_dict.get("io", ""),
             }
             append_csv_row(out_path, fieldnames, row)
             continue
@@ -310,6 +331,7 @@ def run_cpu_sweep(
         unsupported_ops_count = ""
         latency_ms = ""
         fps = ""
+        energy_dict = {}
 
         try:
             num_params = count_parameters(curr_model)
@@ -322,13 +344,14 @@ def run_cpu_sweep(
             flops_per_sample = flops_total / max(curr_batch, 1)
 
             if mode == "full":
-                latency_ms, fps = bench_once(
+                latency_ms, fps, energy_dict = bench_once(
                     model=curr_model,
                     batch=curr_batch,
                     resolution=curr_resolution,
                     iters=iters,
                     warmup=warmup,
                     device=torch_device,
+                    sampler=sampler,
                 )
         except Exception as exc:  # Keep sweeps robust across model/config failures.
             status = "failed"
@@ -354,6 +377,9 @@ def run_cpu_sweep(
                 "warmup": warmup,
                 "latency_ms": _round_float_or_empty(latency_ms),
                 "fps": _round_float_or_empty(fps),
+                "energy_cpu_J": energy_dict.get("cpu", ""),
+                "energy_gpu_J": energy_dict.get("gpu", ""),
+                "energy_io_J": energy_dict.get("io", ""),
             }
 
         append_csv_row(out_path, fieldnames, row)

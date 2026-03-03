@@ -37,6 +37,7 @@ def main() -> None:
     parser.add_argument("--models", nargs="*", default=["resnet18", "resnet50"])
     parser.add_argument("--batches", nargs="*", type=int, default=[1, 2, 4, 8])
     parser.add_argument("--resolutions", nargs="*", type=int, default=[224, 320, 384])
+    parser.add_argument("--enable-energy", action="store_true", help="Enable INA3221 hardware power sampling.")
 
     args = parser.parse_args()
     out_path, run_id = run_cpu_sweep(
@@ -58,6 +59,7 @@ def main() -> None:
         models=args.models,
         batches=args.batches,
         resolutions=args.resolutions,
+        enable_energy=args.enable_energy,
     )
     print(f"Done. run_id={run_id} results saved to: {out_path}")
 
