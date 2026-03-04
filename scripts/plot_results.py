@@ -23,6 +23,40 @@ from energy_inference.plotting import (
 )
 
 
+def plot_energy_components(df, *, x_column: str, title: str | None = None):
+    """Plot energy_cpu_J, energy_gpu_J, and energy_io_J on a shared axis."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    series = [
+        ("energy_cpu_J", "CPU energy (J)", "tab:green", "o"),
+        ("energy_gpu_J", "GPU energy (J)", "tab:red", "s"),
+        ("energy_io_J", "IO energy (J)", "tab:purple", "^"),
+    ]
+
+    any_plotted = False
+    for column, label, color, marker in series:
+        if column in df.columns:
+            ax.plot(df[x_column], df[column], marker=marker, color=color, label=label)
+            any_plotted = True
+
+    if not any_plotted:
+        raise ValueError(
+            "No energy columns found to plot. Expected at least one of: "
+            "energy_cpu_J, energy_gpu_J, energy_io_J."
+        )
+
+    ax.set_xlabel(x_column)
+    ax.set_ylabel("Energy (J)")
+    ax.grid(True, alpha=0.3)
+    if title:
+        ax.set_title(title)
+    else:
+        ax.set_title(f"Energy vs {x_column}")
+    ax.legend()
+    fig.tight_layout()
+    return fig, ax
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plot one metric from one CSV or all CSVs in a run-group directory."
@@ -45,6 +79,11 @@ def main() -> None:
         action="store_true",
         help="Plot latency_ms and fps together using dual y-axes.",
     )
+    parser.add_argument(
+        "--plot-energy",
+        action="store_true",
+        help="Plot energy_cpu_J, energy_gpu_J, and energy_io_J together.",
+    )
     parser.add_argument("--output", type=str, default=None, help="Output image path.")
     parser.add_argument(
         "--output-dir",
@@ -62,6 +101,9 @@ def main() -> None:
     parser.add_argument("--dpi", type=int, default=150)
 
     args = parser.parse_args()
+
+    if args.plot_latency_fps and args.plot_energy:
+        raise ValueError("Cannot use --plot-latency-fps and --plot-energy together.")
 
     if args.input:
         df = load_results_csv(args.input)
@@ -84,6 +126,36 @@ def main() -> None:
                 raise ValueError("No overlapping rows found for latency_ms and fps.")
             fig, _ = plot_latency_and_fps(plot_df, x_column=x_column, title=args.title)
             out_path = args.output or default_plot_path(args.input, "latency_fps")
+        elif args.plot_energy:
+            cpu_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="energy_cpu_J",
+                include_failed=args.include_failed,
+            )
+            gpu_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="energy_gpu_J",
+                include_failed=args.include_failed,
+            )
+            io_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="energy_io_J",
+                include_failed=args.include_failed,
+            )
+            plot_df = cpu_df.merge(gpu_df, on=x_column, how="outer").merge(
+                io_df, on=x_column, how="outer"
+            )
+            if plot_df.empty:
+                raise ValueError("No rows available to plot energy columns.")
+            fig, _ = plot_energy_components(
+                plot_df,
+                x_column=x_column,
+                title=args.title,
+            )
+            out_path = args.output or default_plot_path(args.input, "energy")
         else:
             plot_df = prepare_plot_dataframe(
                 df,
@@ -126,6 +198,36 @@ def main() -> None:
                 raise ValueError("No overlapping rows found for latency_ms and fps.")
             fig, _ = plot_latency_and_fps(plot_df, x_column=x_column, title=args.title)
             suffix = "latency_fps"
+        elif args.plot_energy:
+            cpu_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="energy_cpu_J",
+                include_failed=args.include_failed,
+            )
+            gpu_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="energy_gpu_J",
+                include_failed=args.include_failed,
+            )
+            io_df = prepare_plot_dataframe(
+                df,
+                x_column=x_column,
+                y_column="energy_io_J",
+                include_failed=args.include_failed,
+            )
+            plot_df = cpu_df.merge(gpu_df, on=x_column, how="outer").merge(
+                io_df, on=x_column, how="outer"
+            )
+            if plot_df.empty:
+                raise ValueError("No rows available to plot energy columns.")
+            fig, _ = plot_energy_components(
+                plot_df,
+                x_column=x_column,
+                title=args.title,
+            )
+            suffix = "energy"
         else:
             plot_df = prepare_plot_dataframe(
                 df,
