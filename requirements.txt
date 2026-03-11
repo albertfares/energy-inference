@@ -9,3 +9,5 @@ pandas
 matplotlib
 tqdm
 fvcore
+scikit-learn
+joblib
