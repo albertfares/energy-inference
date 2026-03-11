@@ -104,7 +104,7 @@ def _build_config_from_row(row: dict[str, str]) -> ExperimentConfig:
         )
     cfg.enable_energy = _parse_bool(row.get("enable_energy"), cfg.enable_energy)
 
-    default_models = ["resnet18", "resnet50"]
+    default_models = ["resnet18", "resnet50", "mobilenet_v3_large", "vit_b_16", "swin_t"]
     default_batches = [1, 2, 4, 8]
     default_resolutions = [224, 320, 384]
     cfg.models = _parse_str_list(row.get("models"), default_models)
@@ -202,7 +202,7 @@ def run_experiments_from_csv(csv_path: str) -> tuple[str, list[tuple[int, str, s
             iters=cfg.iters,
             warmup=cfg.warmup,
             sweep=cfg.sweep,
-            models=cfg.models or ["resnet18", "resnet50"],
+            models=cfg.models or ["resnet18", "resnet50", "mobilenet_v3_large", "vit_b_16", "swin_t"],
             batches=cfg.batches or [1, 2, 4, 8],
             resolutions=cfg.resolutions or [224, 320, 384],
             enable_energy=cfg.enable_energy,

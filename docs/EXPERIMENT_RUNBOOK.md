@@ -29,6 +29,13 @@ Produces one merged CSV with:
 
 Use this for most baseline sweeps.
 
+Supported model names include:
+- `resnet18`, `resnet50`
+- `mobilenet_v3_large`, `mobilenet_v3_small`
+- `ssdlite320_mobilenet_v3_large` (aliases: `ssdlite`, `ssdlite320`)
+- `vit_b_16` (alias: `vit`)
+- `swin_t` (aliases: `swin`, `swin_tiny`)
+
 ### `scripts/bench_cpu.py`
 
 Benchmark-only output:
@@ -133,10 +140,14 @@ Use this file as your master index.
 
 For `run_full_cpu.py`, columns include:
 - tracking: `run_id`, `experiment`, `notes`, `timestamp`
-- config: `device`, `sweep_param`, `model_family`, `model`, `batch`, `resolution`, `precision`, `backend`, `iters`, `warmup`
+- config: `device`, `sweep_param`, `model_family`, `model`, `model_task`, `batch`, `resolution`, `precision`, `backend`, `iters`, `warmup`
 - features: `num_params`, `macs_total`, `flops_total`, `flops_total_strict`, `flops_per_sample`, `unsupported_ops_count`
 - runtime: `latency_ms`, `fps`, `power_total_W`
 - health: `status`, `error_msg`
+
+Use `model_task` to separate analyses:
+- `classification`: resnet/mobilenet/vit/swin
+- `detection`: ssdlite/yolo-style models
 
 ## 6) Multiple sweeps strategy
 

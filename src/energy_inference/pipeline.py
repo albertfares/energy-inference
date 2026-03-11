@@ -7,7 +7,12 @@ import torch
 from tqdm import tqdm
 
 from energy_inference.benchmarking import bench_once
-from energy_inference.features import compute_flops, count_parameters, infer_model_family
+from energy_inference.features import (
+    compute_flops,
+    count_parameters,
+    infer_model_family,
+    infer_model_task,
+)
 from energy_inference.io_utils import append_csv_row
 from energy_inference.models import get_model
 from energy_inference.tools.INA3221Sampler import INA3221Sampler
@@ -23,6 +28,7 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "device",
         "sweep_param",
         "model",
+        "model_task",
         "batch",
         "resolution",
         "iters",
@@ -43,6 +49,7 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "sweep_param",
         "model_family",
         "model",
+        "model_task",
         "batch",
         "resolution",
         "precision",
@@ -65,6 +72,7 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "sweep_param",
         "model_family",
         "model",
+        "model_task",
         "batch",
         "resolution",
         "precision",
@@ -232,6 +240,7 @@ def _build_common_row(
         "device": str(torch_device),
         "sweep_param": sweep,
         "model": model_name,
+        "model_task": infer_model_task(model_name),
         "batch": curr_batch,
         "resolution": curr_resolution,
     }

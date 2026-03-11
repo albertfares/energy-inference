@@ -34,7 +34,11 @@ def main() -> None:
         required=True,
         choices=["model", "batch", "resolution"],
     )
-    parser.add_argument("--models", nargs="*", default=["resnet18", "resnet50"])
+    parser.add_argument(
+        "--models",
+        nargs="*",
+        default=["resnet18", "resnet50", "mobilenet_v3_large", "vit_b_16", "swin_t"],
+    )
     parser.add_argument("--batches", nargs="*", type=int, default=[1, 2, 4, 8])
     parser.add_argument("--resolutions", nargs="*", type=int, default=[224, 320, 384])
 
