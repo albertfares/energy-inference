@@ -96,7 +96,7 @@ def build_stacked_energy_figure(
 
     1) Energy (J) vs x
     2) Energy per inference (J) vs x  [requires batch]
-    3) Energy per FLOP (J/FLOP) vs x  [requires flops_total]
+    3) Energy per FLOP (J/FLOP) vs x  [requires flops_total_strict or flops_total]
     """
     plot_df = df.copy()
 
@@ -172,8 +172,11 @@ def build_stacked_energy_figure(
 
     # 3) Energy per FLOP
     ax3 = axes[2]
-    if "flops_total" in plot_df.columns:
-        flops = pd.to_numeric(plot_df["flops_total"], errors="coerce")
+    flops_column = (
+        "flops_total_strict" if "flops_total_strict" in plot_df.columns else "flops_total"
+    )
+    if flops_column in plot_df.columns:
+        flops = pd.to_numeric(plot_df[flops_column], errors="coerce")
         for col, label, color, marker in [
             ("energy_cpu_J", "CPU energy per FLOP (J/FLOP)", "tab:green", "o"),
             ("energy_gpu_J", "GPU energy per FLOP (J/FLOP)", "tab:red", "s"),
@@ -193,7 +196,7 @@ def build_stacked_energy_figure(
         ax3.text(
             0.5,
             0.5,
-            "No 'flops_total' column; per-FLOP energy unavailable.",
+            "No 'flops_total_strict' or 'flops_total' column; per-FLOP energy unavailable.",
             ha="center",
             va="center",
             transform=ax3.transAxes,
@@ -221,7 +224,7 @@ def main() -> None:
         "--y",
         type=str,
         default="latency_ms",
-        help="Metric column to plot on y-axis (e.g., latency_ms, fps, flops_total).",
+        help="Metric column to plot on y-axis (e.g., latency_ms, fps, flops_total_strict).",
     )
     parser.add_argument(
         "--plot-latency-fps",
@@ -246,7 +249,7 @@ def main() -> None:
         action="store_true",
         help=(
             "When used with --plot-energy, divide energy_*_J columns by flops_total "
-            "to show energy per FLOP."
+            "(or flops_total_strict when available) to show energy per FLOP."
         ),
     )
     parser.add_argument(
@@ -319,13 +322,18 @@ def main() -> None:
                 if col in df.columns:
                     df[col] = df[col] / df["batch"]
         if args.per_flop_energy:
-            if "flops_total" not in df.columns:
+            flops_column = (
+                "flops_total_strict"
+                if "flops_total_strict" in df.columns
+                else "flops_total"
+            )
+            if flops_column not in df.columns:
                 raise ValueError(
-                    "CSV is missing 'flops_total' column required for per-FLOP energy."
+                    "CSV is missing 'flops_total_strict' or 'flops_total' column required for per-FLOP energy."
                 )
             for col in ("energy_cpu_J", "energy_gpu_J", "energy_io_J"):
                 if col in df.columns:
-                    df[col] = df[col] / df["flops_total"]
+                    df[col] = df[col] / df[flops_column]
 
         _, x_column = infer_sweep_column(df)
         if args.summary_energy:
@@ -443,13 +451,18 @@ def main() -> None:
                 if col in df.columns:
                     df[col] = df[col] / df["batch"]
         if args.per_flop_energy:
-            if "flops_total" not in df.columns:
+            flops_column = (
+                "flops_total_strict"
+                if "flops_total_strict" in df.columns
+                else "flops_total"
+            )
+            if flops_column not in df.columns:
                 raise ValueError(
-                    f"CSV '{csv_path}' is missing 'flops_total' column required for per-FLOP energy."
+                    f"CSV '{csv_path}' is missing 'flops_total_strict' or 'flops_total' column required for per-FLOP energy."
                 )
             for col in ("energy_cpu_J", "energy_gpu_J", "energy_io_J"):
                 if col in df.columns:
-                    df[col] = df[col] / df["flops_total"]
+                    df[col] = df[col] / df[flops_column]
 
         _, x_column = infer_sweep_column(df)
         if args.summary_energy:

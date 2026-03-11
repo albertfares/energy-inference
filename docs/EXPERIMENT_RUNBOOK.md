@@ -134,7 +134,7 @@ Use this file as your master index.
 For `run_full_cpu.py`, columns include:
 - tracking: `run_id`, `experiment`, `notes`, `timestamp`
 - config: `device`, `sweep_param`, `model_family`, `model`, `batch`, `resolution`, `precision`, `backend`, `iters`, `warmup`
-- features: `num_params`, `flops_total`, `flops_per_sample`, `unsupported_ops_count`
+- features: `num_params`, `macs_total`, `flops_total`, `flops_total_strict`, `flops_per_sample`, `unsupported_ops_count`
 - runtime: `latency_ms`, `fps`, `power_total_W`
 - health: `status`, `error_msg`
 
@@ -244,6 +244,8 @@ Useful y-columns:
 - `latency_ms`
 - `fps`
 - `flops_total`
+- `flops_total_strict`
+- `macs_total`
 - `flops_per_sample`
 
 Plot all child runs from one big run directory:
@@ -253,6 +255,22 @@ python scripts/plot_results.py \
   --run-dir results/runs/<big_run_dir> \
   --y latency_ms
 ```
+
+### Compare FLOPs methods (`fvcore` vs `THOP`)
+
+```bash
+python scripts/compare_flops_methods.py \
+  --device cpu \
+  --models resnet18 resnet50 \
+  --batches 1 8 \
+  --resolutions 224 640
+```
+
+This writes `results/flops/compare_fvcore_vs_thop.csv` with:
+- `fvcore_flops` (current project method)
+- `thop_macs` (THOP native output)
+- `thop_flops_x2` (common alternate FLOPs convention)
+- percent-difference columns vs `fvcore_flops`
 
 ### Run multiple experiments from a CSV
 
@@ -302,12 +320,15 @@ CSV notes:
 - for `sweep=batch`/`sweep=resolution`, `model` is the fixed base model
 - leave optional fields empty to use defaults
 
-## 10) FLOPs warning policy
+## 10) FLOPs counting policy
 
 Current project policy is explicit:
 
-- Unsupported-op warnings from `fvcore` are silenced in code.
-- `unsupported_ops_count` is forced to `0` in CSV output.
+- FLOPs/MACs are computed with `THOP` (`ultralytics-thop`).
+- `macs_total` stores raw THOP MAC count.
+- `flops_total_strict` stores strict FLOPs (`2 * macs_total`).
+- `flops_total` is a backward-compatible alias to `flops_total_strict`.
+- `unsupported_ops_count` remains in the schema and is forced to `0`.
 
 This is intentional to keep benchmark logs clean and reduce confusion during long sweeps.
 

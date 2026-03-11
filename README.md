@@ -144,13 +144,13 @@ This will:
       - `--input INPUT`: plot from a single run CSV.
       - `--run-dir RUN_DIR`: plot all CSVs in a run-group directory (mutually exclusive with `--input`).
     - **metric / plot type**
-      - `--y Y`: metric column for a simple sweep plot (default: `latency_ms`); e.g. `latency_ms`, `fps`, `flops_total`, `power_total_W`.
+      - `--y Y`: metric column for a simple sweep plot (default: `latency_ms`); e.g. `latency_ms`, `fps`, `flops_total_strict`, `macs_total`, `power_total_W`.
       - `--plot-latency-fps`: dual‑axis plot of `latency_ms` and `fps` vs sweep variable.
       - `--plot-energy`: plot `energy_cpu_J`, `energy_gpu_J`, and `energy_io_J` together vs sweep variable.
       - `--summary-energy`: 3‑row stacked figure: total energy, energy per inference, and energy per FLOP.
     - **energy normalization (only with `--plot-energy` / `--summary-energy`)**
       - `--per-sample-energy`: divide `energy_*_J` by `batch` to show energy per inference.
-      - `--per-flop-energy`: divide `energy_*_J` by `flops_total` to show energy per FLOP.
+      - `--per-flop-energy`: divide `energy_*_J` by `flops_total_strict` (or `flops_total` on legacy CSVs) to show energy per FLOP.
     - **axes / filtering**
       - `--log-x`: log scale for x‑axis.
       - `--log-y`: log scale for y‑axis (when applicable).
@@ -220,6 +220,16 @@ This will:
     - `python scripts/run_experiments_csv.py --experiments-csv configs/experiments_example.csv`
   - dry run (validate only):
     - `python scripts/run_experiments_csv.py --experiments-csv configs/experiments_example.csv --dry-run`
+- `scripts/compare_flops_methods.py`
+  - use when you want to compare `fvcore` against `THOP` on the same models/shapes
+  - example:
+    - `python scripts/compare_flops_methods.py --device cpu --models resnet18 resnet50 --batches 1 8 --resolutions 224 640`
+  - output:
+    - writes `results/flops/compare_fvcore_vs_thop.csv` by default with:
+      - `fvcore_flops`
+      - `thop_macs`
+      - `thop_flops_x2`
+      - percent-difference columns to quickly assess mismatch magnitude
   - each execution creates one run-group directory under `results/runs/` and stores all child CSVs there
 
 All three support run tracking flags:
@@ -238,11 +248,13 @@ All three support run tracking flags:
 
 This is the key mechanism that prevents confusion when you run many experiments.
 
-## FLOPs warning policy
+## FLOPs backend policy
 
-- Unsupported-op warnings from `fvcore` are explicitly silenced.
-- `unsupported_ops_count` is explicitly set to `0` in saved CSVs by design.
-- This keeps terminal output clean during sweeps.
+- FLOPs/MACs are computed with `THOP` (`ultralytics-thop`).
+- `macs_total` stores the raw THOP MAC count.
+- `flops_total_strict` stores strict FLOPs (`2 * macs_total`).
+- `flops_total` is kept as a backward-compatible alias to `flops_total_strict`.
+- `unsupported_ops_count` is kept and set to `0` for backward-compatible CSV schema.
 
 ## Legacy command
 

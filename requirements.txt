@@ -9,5 +9,6 @@ pandas
 matplotlib
 tqdm
 fvcore
+ultralytics-thop
 scikit-learn
 joblib

@@ -28,28 +28,27 @@ def compute_flops(
     batch: int,
     resolution: int,
     device: torch.device,
-) -> tuple[float, int]:
+) -> tuple[float, float, int]:
     """
-    Compute FLOPs with fvcore for one input shape.
+    Compute MACs and strict FLOPs with THOP for one input shape.
 
     Returns:
-        flops_total, unsupported_ops_count
+        macs_total, flops_total_strict, unsupported_ops_count
     """
     try:
-        from fvcore.nn import FlopCountAnalysis
+        from thop import profile
     except ImportError as exc:
         raise RuntimeError(
-            "fvcore is not installed. Install it with `pip install fvcore`."
+            "ultralytics-thop is not installed. Install it with `pip install ultralytics-thop`."
         ) from exc
 
     x = torch.randn(batch, 3, resolution, resolution, device=device)
-    analysis = FlopCountAnalysis(model, x)
-    # Explicitly silence unsupported-op warnings to keep CLI output clean.
-    analysis.unsupported_ops_warnings(False)
-    flops_total = float(analysis.total())
+    macs_total, _ = profile(model, inputs=(x,), verbose=False)
+    macs_total = float(macs_total)
+    flops_total_strict = macs_total * 2.0
 
-    # Project policy: do not track unsupported ops in CSV for now.
+    # Keep CSV schema backward-compatible.
     unsupported_ops_count = 0
 
-    return flops_total, unsupported_ops_count
+    return macs_total, flops_total_strict, unsupported_ops_count
 

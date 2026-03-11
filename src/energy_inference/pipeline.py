@@ -48,7 +48,9 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "precision",
         "backend",
         "num_params",
+        "macs_total",
         "flops_total",
+        "flops_total_strict",
         "flops_per_sample",
         "unsupported_ops_count",
         "status",
@@ -70,7 +72,9 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "iters",
         "warmup",
         "num_params",
+        "macs_total",
         "flops_total",
+        "flops_total_strict",
         "flops_per_sample",
         "unsupported_ops_count",
         "latency_ms",
@@ -362,7 +366,9 @@ def run_cpu_sweep(
         status = "ok"
         error_msg = ""
         num_params = ""
+        macs_total = ""
         flops_total = ""
+        flops_total_strict = ""
         flops_per_sample = ""
         unsupported_ops_count = ""
         latency_ms = ""
@@ -371,13 +377,19 @@ def run_cpu_sweep(
 
         try:
             num_params = count_parameters(curr_model)
-            flops_total, unsupported_ops_count = compute_flops(
+            (
+                macs_total,
+                flops_total_strict,
+                unsupported_ops_count,
+            ) = compute_flops(
                 model=curr_model,
                 batch=curr_batch,
                 resolution=curr_resolution,
                 device=torch_device,
             )
-            flops_per_sample = flops_total / max(curr_batch, 1)
+            # Keep legacy `flops_total` as strict FLOPs for publication clarity.
+            flops_total = flops_total_strict
+            flops_per_sample = flops_total_strict / max(curr_batch, 1)
 
             if mode == "full":
                 latency_ms, fps, energy_dict = bench_once(
@@ -398,7 +410,9 @@ def run_cpu_sweep(
             "precision": precision,
             "backend": backend,
             "num_params": num_params,
+            "macs_total": _round_float_or_empty(macs_total),
             "flops_total": _round_float_or_empty(flops_total),
+            "flops_total_strict": _round_float_or_empty(flops_total_strict),
             "flops_per_sample": _round_float_or_empty(flops_per_sample),
             "unsupported_ops_count": unsupported_ops_count,
             "status": status,
