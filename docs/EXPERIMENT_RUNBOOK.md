@@ -135,7 +135,7 @@ For `run_full_cpu.py`, columns include:
 - tracking: `run_id`, `experiment`, `notes`, `timestamp`
 - config: `device`, `sweep_param`, `model_family`, `model`, `batch`, `resolution`, `precision`, `backend`, `iters`, `warmup`
 - features: `num_params`, `flops_total`, `flops_per_sample`, `unsupported_ops_count`
-- runtime: `latency_ms`, `fps`
+- runtime: `latency_ms`, `fps`, `power_total_W`
 - health: `status`, `error_msg`
 
 ## 6) Multiple sweeps strategy

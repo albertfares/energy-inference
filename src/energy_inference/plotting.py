@@ -165,7 +165,14 @@ def list_run_csv_files(run_dir: str) -> list[str]:
     if not directory.exists() or not directory.is_dir():
         raise ValueError(f"Run directory does not exist: {run_dir}")
 
-    files = sorted(str(p) for p in directory.glob("*.csv"))
+    # Only include the per-row summary CSVs and skip auxiliary trace CSVs
+    # such as power traces (e.g., "*_power_trace.csv"), which don't follow
+    # the same schema and will break sweep inference/plotting.
+    files = sorted(
+        str(p)
+        for p in directory.glob("*.csv")
+        if "power_trace" not in p.stem
+    )
     if not files:
         raise ValueError(f"No CSV files found in run directory: {run_dir}")
     return files

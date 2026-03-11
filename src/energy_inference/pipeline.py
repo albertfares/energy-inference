@@ -32,6 +32,7 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "energy_cpu_J",
         "energy_gpu_J",
         "energy_io_J",
+        "power_total_W",
     ],
     "features": [
         "run_id",
@@ -77,6 +78,7 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "energy_cpu_J",
         "energy_gpu_J",
         "energy_io_J",
+        "power_total_W",
         "status",
         "error_msg",
     ],
@@ -178,6 +180,33 @@ def _resolve_run_values(
 
 def _round_float_or_empty(value: object) -> float | str:
     return round(value, 4) if isinstance(value, float) else ""
+
+
+def _compute_total_power_w(
+    *,
+    energy_dict: dict[str, float],
+    latency_ms: float | str,
+    iters: int,
+) -> float | str:
+    if not isinstance(latency_ms, float):
+        return ""
+
+    total_s = (latency_ms / 1000.0) * max(iters, 1)
+    if total_s <= 0:
+        return ""
+
+    total_energy_j = 0.0
+    has_energy = False
+    for key in ("cpu", "gpu", "io"):
+        value = energy_dict.get(key)
+        if isinstance(value, float):
+            total_energy_j += value
+            has_energy = True
+
+    if not has_energy:
+        return ""
+
+    return round(total_energy_j / total_s, 4)
 
 
 def _build_common_row(
@@ -321,6 +350,11 @@ def run_cpu_sweep(
                 "energy_cpu_J": energy_dict.get("cpu", ""),
                 "energy_gpu_J": energy_dict.get("gpu", ""),
                 "energy_io_J": energy_dict.get("io", ""),
+                "power_total_W": _compute_total_power_w(
+                    energy_dict=energy_dict,
+                    latency_ms=latency_ms,
+                    iters=iters,
+                ),
             }
             append_csv_row(out_path, fieldnames, row)
             continue
@@ -382,6 +416,11 @@ def run_cpu_sweep(
                 "energy_cpu_J": energy_dict.get("cpu", ""),
                 "energy_gpu_J": energy_dict.get("gpu", ""),
                 "energy_io_J": energy_dict.get("io", ""),
+                "power_total_W": _compute_total_power_w(
+                    energy_dict=energy_dict,
+                    latency_ms=latency_ms,
+                    iters=iters,
+                ),
             }
 
         append_csv_row(out_path, fieldnames, row)

@@ -33,6 +33,8 @@ energy-inference/
     bench_cpu.py             # benchmark-only CSV
     extract_features.py      # features-only CSV
     run_full_cpu.py          # merged benchmark+features CSV
+    train_energy_model.py    # simple baseline energy predictor training
+    predict_energy.py        # CLI for running predictions with trained energy model
     run_experiments_csv.py   # run multiple experiments from CSV
     plot_results.py          # plot one metric vs swept variable
   benchmarks/
@@ -43,10 +45,12 @@ energy-inference/
   data/
     raw/
     processed/
+    training_data/           # curated CSVs used for energy model training
   notebooks/
   results/
     run_index.csv            # one row per CLI execution
     runs/                    # default output location (one file per run)
+    models/                  # serialized prediction models (e.g., energy predictor)
   requirements.txt
 ```
 
@@ -125,12 +129,91 @@ This will:
 - `scripts/plot_results.py`
   - use when you want a quick plot from one run CSV
   - auto-detects x-axis from `sweep_param`
-  - example:
+  - core usage examples:
     - `python scripts/plot_results.py --input results/runs/<your_run>.csv --y latency_ms`
     - `python scripts/plot_results.py --input results/runs/<your_run>.csv --plot-latency-fps`
+    - `python scripts/plot_results.py --input results/runs/<your_run>.csv --plot-energy`
+    - `python scripts/plot_results.py --input results/runs/<your_run>.csv --summary-energy`
   - run-group plotting in one command:
     - `python scripts/plot_results.py --run-dir results/runs/<group_dir> --y latency_ms`
     - `python scripts/plot_results.py --run-dir results/runs/<group_dir> --plot-latency-fps`
+    - `python scripts/plot_results.py --run-dir results/runs/<group_dir> --plot-energy`
+    - `python scripts/plot_results.py --run-dir results/runs/<group_dir> --summary-energy`
+  - flags (see `python scripts/plot_results.py --help` for full help):
+    - **input / selection**
+      - `--input INPUT`: plot from a single run CSV.
+      - `--run-dir RUN_DIR`: plot all CSVs in a run-group directory (mutually exclusive with `--input`).
+    - **metric / plot type**
+      - `--y Y`: metric column for a simple sweep plot (default: `latency_ms`); e.g. `latency_ms`, `fps`, `flops_total`, `power_total_W`.
+      - `--plot-latency-fps`: dual‑axis plot of `latency_ms` and `fps` vs sweep variable.
+      - `--plot-energy`: plot `energy_cpu_J`, `energy_gpu_J`, and `energy_io_J` together vs sweep variable.
+      - `--summary-energy`: 3‑row stacked figure: total energy, energy per inference, and energy per FLOP.
+    - **energy normalization (only with `--plot-energy` / `--summary-energy`)**
+      - `--per-sample-energy`: divide `energy_*_J` by `batch` to show energy per inference.
+      - `--per-flop-energy`: divide `energy_*_J` by `flops_total` to show energy per FLOP.
+    - **axes / filtering**
+      - `--log-x`: log scale for x‑axis.
+      - `--log-y`: log scale for y‑axis (when applicable).
+      - `--include-failed`: include rows with `status != "ok"` (by default, only successful rows are plotted when status is present).
+    - **output / display**
+      - `--output OUTPUT`: explicit output image path when using `--input`.
+      - `--output-dir OUTPUT_DIR`: output directory when using `--run-dir` (default: `results/plots/<run_dir_name>`).
+      - `--title TITLE`: optional plot title.
+      - `--show`: open an interactive window in addition to saving the PNG.
+      - `--dpi DPI`: output figure DPI (default: `150`).
+- `scripts/train_energy_model.py`
+  - use when you want to train a **simple baseline predictor** for energy consumption from existing run CSVs
+  - workflow:
+    - run your normal experiments (e.g., with `scripts/run_full_cpu.py` or `scripts/run_experiments_csv.py`) which produce CSVs under `results/runs/`
+    - manually copy/move the CSVs you want to use for training into `data/training_data/`
+      - for example:
+        - `cp results/runs/<run_group>/row003_full_jetson_orin_resnet18_resolution_sweep.csv data/training_data/20260304_resolution_sweep.csv`
+    - run:
+      - `python scripts/train_energy_model.py`
+  - behavior:
+    - automatically uses **all CSVs** in `data/training_data/` (concatenated) for training
+    - currently trains a **linear regression model** (via `scikit-learn`) to predict `energy_cpu_J` from **static / hyperparameter-derived numeric features only** (no measured latency):
+      - `flops_total`, `batch`, `resolution`
+    - prints basic evaluation metrics on a held-out test split:
+      - R², MAE (J), and the learned coefficients / intercept
+    - saves a serialized model payload under `results/models/energy_cpu_linear.joblib` containing:
+      - the trained model
+      - the feature name list
+      - the target name (`energy_cpu_J`)
+  - example of using the saved model for inference in Python:
+    - ```python
+      from joblib import load
+
+      payload = load("results/models/energy_cpu_linear.joblib")
+      model = payload["model"]
+      feature_names = payload["feature_names"]  # ["flops_total", "batch", "resolution"]
+
+      # X_new must be a 2D array / DataFrame with these columns, in this order.
+      import pandas as pd
+      X_new = pd.DataFrame(
+          [
+              {"flops_total": 3.8e10, "batch": 1, "resolution": 640},
+          ]
+      )[feature_names]
+      y_pred = model.predict(X_new)
+      print("Predicted energy_cpu_J:", y_pred[0])
+      ```
+- `scripts/predict_energy.py`
+  - use when you want a **small CLI** to query the trained energy predictor
+  - requires that you have already run `scripts/train_energy_model.py` and have:
+    - `results/models/energy_cpu_linear.joblib`
+  - example:
+    - ```bash
+      python scripts/predict_energy.py \
+        --flops-total 3.8004576256e10 \
+        --batch 1 \
+        --resolution 640
+      ```
+  - behavior:
+    - loads the Joblib payload from `results/models/energy_cpu_linear.joblib` (or `--model-path`)
+    - constructs a single-row input with features:
+      - `flops_total`, `batch`, `resolution`
+    - prints the predicted `energy_cpu_J` to stdout
 - `scripts/run_experiments_csv.py`
   - use when you want to run many experiments from a CSV template
   - example:
