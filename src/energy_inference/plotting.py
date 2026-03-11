@@ -3,11 +3,12 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
-VALID_SWEEPS = {"model", "batch", "resolution"}
+VALID_SWEEPS = {"model", "batch", "resolution", "precision"}
 SWEEP_TO_COLUMN = {
     "model": "model",
     "batch": "batch",
     "resolution": "resolution",
+    "precision": "precision",
 }
 
 

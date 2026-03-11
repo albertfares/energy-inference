@@ -56,7 +56,7 @@ This file is the source of truth for AI/code agents working in this repository.
   - `run_id`, `experiment`, `notes`
 - CSV experiment semantics:
   - if `sweep=model`, `models` is the true sweep list (`model` can be empty)
-  - if `sweep=batch` or `sweep=resolution`, `model` is fixed base model
+  - if `sweep=batch`, `sweep=resolution`, or `sweep=precision`, `model` is fixed base model
 
 ## 5) GPU timing and behavior
 

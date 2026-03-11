@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--model", type=str, default="resnet18")
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--resolution", type=int, default=224)
+    parser.add_argument("--precision", type=str, default="fp32")
     parser.add_argument("--iters", type=int, default=200)
     parser.add_argument("--warmup", type=int, default=30)
 
@@ -32,7 +33,7 @@ def main() -> None:
         "--sweep",
         type=str,
         required=True,
-        choices=["model", "batch", "resolution"],
+        choices=["model", "batch", "resolution", "precision"],
     )
     parser.add_argument(
         "--models",
@@ -41,6 +42,7 @@ def main() -> None:
     )
     parser.add_argument("--batches", nargs="*", type=int, default=[1, 2, 4, 8])
     parser.add_argument("--resolutions", nargs="*", type=int, default=[224, 320, 384])
+    parser.add_argument("--precisions", nargs="*", default=["fp32", "fp16", "bf16"])
     parser.add_argument("--enable-energy", action="store_true", help="Enable INA3221 hardware power sampling.")
 
     args = parser.parse_args()
@@ -55,7 +57,7 @@ def main() -> None:
         model=args.model,
         batch=args.batch,
         resolution=args.resolution,
-        precision="fp32",
+        precision=args.precision,
         backend="eager",
         iters=args.iters,
         warmup=args.warmup,
@@ -63,6 +65,7 @@ def main() -> None:
         models=args.models,
         batches=args.batches,
         resolutions=args.resolutions,
+        precisions=args.precisions,
         enable_energy=args.enable_energy,
     )
     print(f"Done. run_id={run_id} results saved to: {out_path}")

@@ -7,7 +7,7 @@ from pathlib import Path
 from energy_inference.pipeline import RunMode, run_cpu_sweep
 
 VALID_MODES = {"bench", "features", "full"}
-VALID_SWEEPS = {"model", "batch", "resolution"}
+VALID_SWEEPS = {"model", "batch", "resolution", "precision"}
 
 
 @dataclass
@@ -30,6 +30,7 @@ class ExperimentConfig:
     models: list[str] | None = None
     batches: list[int] | None = None
     resolutions: list[int] | None = None
+    precisions: list[str] | None = None
     enable_energy: bool = False
 
 
@@ -107,9 +108,11 @@ def _build_config_from_row(row: dict[str, str]) -> ExperimentConfig:
     default_models = ["resnet18", "resnet50", "mobilenet_v3_large", "vit_b_16", "swin_t"]
     default_batches = [1, 2, 4, 8]
     default_resolutions = [224, 320, 384]
+    default_precisions = ["fp32", "fp16", "bf16"]
     cfg.models = _parse_str_list(row.get("models"), default_models)
     cfg.batches = _parse_int_list(row.get("batches"), default_batches)
     cfg.resolutions = _parse_int_list(row.get("resolutions"), default_resolutions)
+    cfg.precisions = _parse_str_list(row.get("precisions"), default_precisions)
     return cfg
 
 
@@ -151,15 +154,18 @@ def summarize_config(cfg: ExperimentConfig) -> str:
         swept_values = ",".join(cfg.models or [])
     elif cfg.sweep == "batch":
         swept_values = ",".join(str(v) for v in (cfg.batches or []))
-    else:
+    elif cfg.sweep == "resolution":
         swept_values = ",".join(str(v) for v in (cfg.resolutions or []))
+    else:
+        swept_values = ",".join(cfg.precisions or [])
 
     base_model = cfg.model if cfg.model else "<auto>"
     return (
         f"mode={cfg.mode} device={cfg.device} sweep={cfg.sweep} "
         f"sweep_values=[{swept_values}] experiment={cfg.experiment} "
         f"model(base)={base_model} batch(base)={cfg.batch} "
-        f"resolution(base)={cfg.resolution} iters={cfg.iters} warmup={cfg.warmup}"
+        f"resolution(base)={cfg.resolution} precision(base)={cfg.precision} "
+        f"iters={cfg.iters} warmup={cfg.warmup}"
     )
 
 
@@ -205,6 +211,7 @@ def run_experiments_from_csv(csv_path: str) -> tuple[str, list[tuple[int, str, s
             models=cfg.models or ["resnet18", "resnet50", "mobilenet_v3_large", "vit_b_16", "swin_t"],
             batches=cfg.batches or [1, 2, 4, 8],
             resolutions=cfg.resolutions or [224, 320, 384],
+            precisions=cfg.precisions or ["fp32", "fp16", "bf16"],
             enable_energy=cfg.enable_energy,
         )
         completed.append((row_number, run_id, out_path))

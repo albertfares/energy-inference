@@ -32,7 +32,7 @@ def main() -> None:
         "--sweep",
         type=str,
         required=True,
-        choices=["model", "batch", "resolution"],
+        choices=["model", "batch", "resolution", "precision"],
     )
     parser.add_argument(
         "--models",
@@ -41,6 +41,7 @@ def main() -> None:
     )
     parser.add_argument("--batches", nargs="*", type=int, default=[1, 2, 4, 8])
     parser.add_argument("--resolutions", nargs="*", type=int, default=[224, 320, 384])
+    parser.add_argument("--precisions", nargs="*", default=["fp32", "fp16", "bf16"])
 
     args = parser.parse_args()
     out_path, run_id = run_cpu_sweep(
@@ -62,6 +63,7 @@ def main() -> None:
         models=args.models,
         batches=args.batches,
         resolutions=args.resolutions,
+        precisions=args.precisions,
     )
     print(f"Done. run_id={run_id} features saved to: {out_path}")
 

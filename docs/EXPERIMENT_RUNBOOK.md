@@ -73,7 +73,7 @@ Features-only output:
 ### Experiment config flags
 
 - `--device {cpu,cuda}`
-- `--sweep {model,batch,resolution}`
+- `--sweep {model,batch,resolution,precision}`
 - `--models ...`
 - `--batches ...`
 - `--resolutions ...`
@@ -226,6 +226,17 @@ conda run -n energy-inference python scripts/run_full.py \
   --notes "same iters/warmup as baseline"
 ```
 
+### Precision sweep
+
+```bash
+conda run -n energy-inference python scripts/run_full.py \
+  --sweep precision \
+  --model resnet18 \
+  --precisions fp32 fp16 bf16 \
+  --experiment cpu_resnet18_precision_scaling \
+  --notes "same iters/warmup as baseline"
+```
+
 ### Benchmark-only run
 
 ```bash
@@ -329,7 +340,7 @@ CSV notes:
 - `mode`: `full`, `bench`, or `features`
 - list fields are comma-separated (e.g., `1,2,4,8`)
 - for `sweep=model`, use `models` list as the true sweep values (`model` can be empty)
-- for `sweep=batch`/`sweep=resolution`, `model` is the fixed base model
+- for `sweep=batch`/`sweep=resolution`/`sweep=precision`, `model` is the fixed base model
 - leave optional fields empty to use defaults
 
 ## 10) FLOPs counting policy

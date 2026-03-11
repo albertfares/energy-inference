@@ -1,4 +1,5 @@
 import time
+from contextlib import nullcontext
 from typing import Optional
 
 import torch
@@ -14,6 +15,7 @@ def bench_once(
     iters: int,
     warmup: int,
     device: torch.device,
+    precision: str = "fp32",
     sampler: Optional[INA3221Sampler] = None,
 ) -> tuple[float, float, dict[str, float]]:
     """
@@ -22,10 +24,23 @@ def bench_once(
     Returns:
         (latency_ms, fps, energy_dict)
     """
+    precision_norm = precision.lower()
+    if precision_norm == "fp32":
+        autocast_ctx = nullcontext
+    elif precision_norm == "fp16":
+        if device.type != "cuda":
+            raise ValueError("fp16 precision is only supported on cuda device.")
+        autocast_ctx = lambda: torch.autocast(device_type=device.type, dtype=torch.float16)
+    elif precision_norm == "bf16":
+        autocast_ctx = lambda: torch.autocast(device_type=device.type, dtype=torch.bfloat16)
+    else:
+        raise ValueError("Unsupported precision. Use one of: fp32, fp16, bf16.")
+
     x = torch.randn(batch, 3, resolution, resolution, device=device)
 
     for _ in range(warmup):
-        _ = model(x)
+        with autocast_ctx():
+            _ = model(x)
         
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -38,7 +53,8 @@ def bench_once(
 
     t0 = time.perf_counter()
     for _ in range(iters):
-        _ = model(x)
+        with autocast_ctx():
+            _ = model(x)
         
     if device.type == "cuda":
         torch.cuda.synchronize()

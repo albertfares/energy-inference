@@ -28,6 +28,7 @@ FIELDNAMES_BY_MODE: dict[RunMode, list[str]] = {
         "device",
         "sweep_param",
         "model",
+        "precision",
         "model_task",
         "batch",
         "resolution",
@@ -175,19 +176,23 @@ def _resolve_run_values(
     default_model: str,
     default_batch: int,
     default_resolution: int,
-) -> tuple[str, int, int]:
+    default_precision: str,
+) -> tuple[str, int, int, str]:
     model_name = default_model
     curr_batch = default_batch
     curr_resolution = default_resolution
+    curr_precision = default_precision
 
     if sweep == "model":
         model_name = str(value)
     elif sweep == "batch":
         curr_batch = int(value)
-    else:
+    elif sweep == "resolution":
         curr_resolution = int(value)
+    else:
+        curr_precision = str(value)
 
-    return model_name, curr_batch, curr_resolution
+    return model_name, curr_batch, curr_resolution, curr_precision
 
 
 def _round_float_or_empty(value: object) -> float | str:
@@ -229,6 +234,7 @@ def _build_common_row(
     torch_device: torch.device,
     sweep: str,
     model_name: str,
+    curr_precision: str,
     curr_batch: int,
     curr_resolution: int,
 ) -> dict[str, object]:
@@ -240,6 +246,7 @@ def _build_common_row(
         "device": str(torch_device),
         "sweep_param": sweep,
         "model": model_name,
+        "precision": curr_precision,
         "model_task": infer_model_task(model_name),
         "batch": curr_batch,
         "resolution": curr_resolution,
@@ -251,12 +258,15 @@ def get_sweep_values(
     models: list[str],
     batches: list[int],
     resolutions: list[int],
+    precisions: list[str],
 ) -> list[str] | list[int]:
     if sweep == "model":
         return models
     if sweep == "batch":
         return batches
-    return resolutions
+    if sweep == "resolution":
+        return resolutions
+    return precisions
 
 
 @torch.no_grad()
@@ -280,6 +290,7 @@ def run_cpu_sweep(
     models: list[str],
     batches: list[int],
     resolutions: list[int],
+    precisions: list[str],
     enable_energy: bool = False,
 ) -> tuple[str, str]:
     torch_device = torch.device(device)
@@ -304,7 +315,7 @@ def run_cpu_sweep(
         notes=notes,
     )
 
-    sweep_values = get_sweep_values(sweep, models, batches, resolutions)
+    sweep_values = get_sweep_values(sweep, models, batches, resolutions, precisions)
     fieldnames = FIELDNAMES_BY_MODE[mode]
     desc_prefix = DESC_PREFIX_BY_MODE[mode]
 
@@ -322,12 +333,13 @@ def run_cpu_sweep(
         )
 
     for value in tqdm(sweep_values, desc=f"{desc_prefix} {sweep}", unit="cfg"):
-        model_name, curr_batch, curr_resolution = _resolve_run_values(
+        model_name, curr_batch, curr_resolution, curr_precision = _resolve_run_values(
             sweep=sweep,
             value=value,
             default_model=model,
             default_batch=batch,
             default_resolution=resolution,
+            default_precision=precision,
         )
 
         if model_name not in model_cache:
@@ -341,6 +353,7 @@ def run_cpu_sweep(
             torch_device=torch_device,
             sweep=sweep,
             model_name=model_name,
+            curr_precision=curr_precision,
             curr_batch=curr_batch,
             curr_resolution=curr_resolution,
         )
@@ -353,6 +366,7 @@ def run_cpu_sweep(
                 iters=iters,
                 warmup=warmup,
                 device=torch_device,
+                precision=curr_precision,
                 sampler=sampler,
             )
             row = base_row | {
@@ -408,6 +422,7 @@ def run_cpu_sweep(
                     iters=iters,
                     warmup=warmup,
                     device=torch_device,
+                    precision=curr_precision,
                     sampler=sampler,
                 )
         except Exception as exc:  # Keep sweeps robust across model/config failures.
@@ -416,7 +431,7 @@ def run_cpu_sweep(
 
         feature_fields = {
             "model_family": infer_model_family(model_name),
-            "precision": precision,
+            "precision": curr_precision,
             "backend": backend,
             "num_params": num_params,
             "macs_total": _round_float_or_empty(macs_total),

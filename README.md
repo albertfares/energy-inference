@@ -118,15 +118,32 @@ This will:
 - add one run entry in `results/run_index.csv`
 - print the exact `run_id` and output path
 
+Precision sweep example:
+
+```bash
+conda run -n energy-inference python scripts/run_full.py \
+  --sweep precision \
+  --model resnet18 \
+  --precisions fp32 fp16 bf16 \
+  --experiment cpu_resnet18_precision_sweep \
+  --notes "precision scaling baseline"
+```
+
 ## Scripts and when to use them
 
 - `scripts/run_full.py`
   - use when you want one merged table per run
   - includes: params/FLOPs + latency/FPS + metadata
+  - sweep axes: `model`, `batch`, `resolution`, `precision`
+  - precision list arg for precision sweep: `--precisions fp32 fp16 bf16`
 - `scripts/bench_cpu.py`
   - use when you only want runtime metrics
+  - sweep axes: `model`, `batch`, `resolution`, `precision`
+  - precision list arg for precision sweep: `--precisions fp32 fp16 bf16`
 - `scripts/extract_features.py`
   - use when you only want model/config features
+  - sweep axes: `model`, `batch`, `resolution`, `precision`
+  - precision list arg for precision sweep: `--precisions fp32 fp16 bf16`
 - `scripts/plot_results.py`
   - use when you want a quick plot from one run CSV
   - auto-detects x-axis from `sweep_param`
@@ -173,8 +190,9 @@ This will:
       - `python scripts/train_energy_model.py`
   - behavior:
     - automatically uses **all CSVs** in `data/training_data/` (concatenated) for training
-    - currently trains a **linear regression model** (via `scikit-learn`) to predict `energy_cpu_J` from **static / hyperparameter-derived numeric features only** (no measured latency):
-      - `flops_total`, `batch`, `resolution`
+    - currently trains a **linear regression model** (via `scikit-learn`) to predict `energy_cpu_J` from static / hyperparameter-derived features only (no measured latency):
+      - numeric: `flops_total`, `batch`, `resolution`
+      - categorical (one-hot): `precision` (e.g., `fp32`, `fp16`, `bf16`)
     - prints basic evaluation metrics on a held-out test split:
       - R², MAE (J), and the learned coefficients / intercept
     - saves a serialized model payload under `results/models/energy_cpu_linear.joblib` containing:
@@ -187,15 +205,15 @@ This will:
 
       payload = load("results/models/energy_cpu_linear.joblib")
       model = payload["model"]
-      feature_names = payload["feature_names"]  # ["flops_total", "batch", "resolution"]
+      feature_names = payload["feature_names"]  # e.g., ["flops_total", "batch", "resolution", "precision_fp16", ...]
 
       # X_new must be a 2D array / DataFrame with these columns, in this order.
       import pandas as pd
-      X_new = pd.DataFrame(
-          [
-              {"flops_total": 3.8e10, "batch": 1, "resolution": 640},
-          ]
-      )[feature_names]
+      row = {"flops_total": 3.8e10, "batch": 1, "resolution": 640}
+      for f in feature_names:
+          if f.startswith("precision_"):
+              row[f] = 1.0 if f == "precision_fp16" else 0.0
+      X_new = pd.DataFrame([row]).reindex(columns=feature_names, fill_value=0.0)
       y_pred = model.predict(X_new)
       print("Predicted energy_cpu_J:", y_pred[0])
       ```
@@ -208,12 +226,13 @@ This will:
       python scripts/predict_energy.py \
         --flops-total 3.8004576256e10 \
         --batch 1 \
-        --resolution 640
+        --resolution 640 \
+        --precision fp16
       ```
   - behavior:
     - loads the Joblib payload from `results/models/energy_cpu_linear.joblib` (or `--model-path`)
     - constructs a single-row input with features:
-      - `flops_total`, `batch`, `resolution`
+      - `flops_total`, `batch`, `resolution`, and precision one-hot fields expected by the saved model schema
     - prints the predicted `energy_cpu_J` to stdout
 - `scripts/run_experiments_csv.py`
   - use when you want to run many experiments from a CSV template
