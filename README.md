@@ -11,7 +11,7 @@ extraction, and robust experiment tracking.
 
 ## What this project does (current stage)
 
-- Runs inference benchmarks on vision models (currently supports `resnet18`, `resnet50`, `mobilenet_v3_large`, `mobilenet_v3_small`, `ssdlite320_mobilenet_v3_large`, `vit_b_16`, `swin_t`)
+- Runs inference benchmarks on vision models (currently supports `resnet18`, `resnet50`, `mobilenet_v3_large`, `mobilenet_v3_small`, `ssdlite320_mobilenet_v3_large`, `vit_b_16`, `swin_t`, `yolov8n`)
 - Tags each row with `model_task` (`classification` or `detection`) to keep comparisons fair
 - Measures latency and FPS
 - Extracts static features (parameters, FLOPs, metadata)

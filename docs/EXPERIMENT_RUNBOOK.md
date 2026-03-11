@@ -35,6 +35,7 @@ Supported model names include:
 - `ssdlite320_mobilenet_v3_large` (aliases: `ssdlite`, `ssdlite320`)
 - `vit_b_16` (alias: `vit`)
 - `swin_t` (aliases: `swin`, `swin_tiny`)
+- `yolov8n` (aliases: `yolo`, `yolov8n.yaml`; requires `ultralytics`)
 
 ### `scripts/bench_cpu.py`
 

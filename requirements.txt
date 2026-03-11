@@ -10,5 +10,6 @@ matplotlib
 tqdm
 fvcore
 ultralytics-thop
+ultralytics
 scikit-learn
 joblib

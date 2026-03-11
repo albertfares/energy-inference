@@ -18,6 +18,28 @@ class _SSDLiteBatchWrapper(torch.nn.Module):
         return self.detector(images)
 
 
+class _YOLOBatchWrapper(torch.nn.Module):
+    """Adapt Ultralytics YOLO to batched tensor input [B,3,H,W]."""
+
+    def __init__(self, variant: str = "yolov8n.yaml") -> None:
+        super().__init__()
+        try:
+            from ultralytics import YOLO
+        except ImportError as exc:
+            raise RuntimeError(
+                "ultralytics is not installed. Install it with `pip install ultralytics`."
+            ) from exc
+        # Use YAML model definition to avoid implicit weight downloads.
+        self.detector = YOLO(variant).model
+
+    def forward(self, x: torch.Tensor):
+        if x.ndim != 4:
+            raise ValueError(
+                f"Expected input shape [B,3,H,W] for YOLO wrapper, got {tuple(x.shape)}."
+            )
+        return self.detector(x)
+
+
 def get_model(name: str) -> torch.nn.Module:
     """Return a torchvision model by lowercase name."""
     model_name = name.lower()
@@ -36,10 +58,13 @@ def get_model(name: str) -> torch.nn.Module:
         return models.vit_b_16(weights=None)
     if model_name in {"swin_t", "swin", "swin_tiny", "swin-tiny"}:
         return models.swin_t(weights=None)
+    if model_name in {"yolo", "yolov8n", "yolov8n.yaml"}:
+        return _YOLOBatchWrapper(variant="yolov8n.yaml")
 
     raise ValueError(
         "Unknown model: "
         f"{name}. Supported: resnet18, resnet50, mobilenet_v3_large, "
-        "mobilenet_v3_small, ssdlite320_mobilenet_v3_large, vit_b_16, swin_t."
+        "mobilenet_v3_small, ssdlite320_mobilenet_v3_large, vit_b_16, "
+        "swin_t, yolov8n."
     )
 
