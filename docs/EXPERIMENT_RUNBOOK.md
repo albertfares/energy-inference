@@ -18,7 +18,7 @@ This design makes it easy to recover context later even after many runs.
 
 ## 2) Scripts overview
 
-### `scripts/run_full_cpu.py` (recommended default)
+### `scripts/run_full.py` (recommended default)
 
 Produces one merged CSV with:
 - model/config metadata
@@ -102,7 +102,7 @@ Examples:
 ### Step B: run merged pipeline
 
 ```bash
-conda run -n energy-inference python scripts/run_full_cpu.py \
+conda run -n energy-inference python scripts/run_full.py \
   --device cpu \
   --sweep model \
   --models resnet18 resnet50 \
@@ -138,7 +138,7 @@ Use this file as your master index.
 
 ## Per-run CSVs in `results/runs/`
 
-For `run_full_cpu.py`, columns include:
+For `run_full.py`, columns include:
 - tracking: `run_id`, `experiment`, `notes`, `timestamp`
 - config: `device`, `sweep_param`, `model_family`, `model`, `model_task`, `batch`, `resolution`, `precision`, `backend`, `iters`, `warmup`
 - features: `num_params`, `macs_total`, `flops_total`, `flops_total_strict`, `flops_per_sample`, `unsupported_ops_count`
@@ -196,7 +196,7 @@ After running:
 ### Model sweep (default baseline)
 
 ```bash
-conda run -n energy-inference python scripts/run_full_cpu.py \
+conda run -n energy-inference python scripts/run_full.py \
   --sweep model \
   --models resnet18 resnet50 \
   --experiment cpu_resnets_model_baseline \
@@ -206,7 +206,7 @@ conda run -n energy-inference python scripts/run_full_cpu.py \
 ### Batch sweep on one model
 
 ```bash
-conda run -n energy-inference python scripts/run_full_cpu.py \
+conda run -n energy-inference python scripts/run_full.py \
   --sweep batch \
   --model resnet18 \
   --batches 1 2 4 8 16 \
@@ -217,7 +217,7 @@ conda run -n energy-inference python scripts/run_full_cpu.py \
 ### Resolution sweep
 
 ```bash
-conda run -n energy-inference python scripts/run_full_cpu.py \
+conda run -n energy-inference python scripts/run_full.py \
   --sweep resolution \
   --model resnet50 \
   --resolutions 160 224 320 384 \
@@ -307,13 +307,13 @@ python scripts/run_experiments_csv.py --experiments-csv configs/experiments_exam
 Equivalent option on full runner:
 
 ```bash
-python scripts/run_full_cpu.py --experiments-csv configs/experiments_example.csv
+python scripts/run_full.py --experiments-csv configs/experiments_example.csv
 ```
 
 Dry run through full runner:
 
 ```bash
-python scripts/run_full_cpu.py --experiments-csv configs/experiments_example.csv --dry-run
+python scripts/run_full.py --experiments-csv configs/experiments_example.csv --dry-run
 ```
 
 Jetson quick start:
@@ -365,7 +365,7 @@ This is intentional to keep benchmark logs clean and reduce confusion during lon
 4. Re-run baseline:
 
 ```bash
-conda run -n energy-inference python scripts/run_full_cpu.py \
+conda run -n energy-inference python scripts/run_full.py \
   --sweep model \
   --models resnet18 resnet50 \
   --experiment cpu_rebaseline \

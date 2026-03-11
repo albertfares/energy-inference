@@ -12,7 +12,7 @@ This file is the source of truth for AI/code agents working in this repository.
   - `plotting.py`: plotting utilities
   - `experiment_runner.py`: CSV-driven experiment runner
 - CLI scripts: `scripts/`
-  - `run_full_cpu.py`
+  - `run_full.py`
   - `bench_cpu.py`
   - `extract_features.py`
   - `run_experiments_csv.py`
@@ -38,7 +38,7 @@ This file is the source of truth for AI/code agents working in this repository.
 ## 3) Canonical run commands
 
 - Single merged sweep:
-  - `python scripts/run_full_cpu.py --sweep model --models resnet18 resnet50 --experiment <name> --notes "<text>"`
+  - `python scripts/run_full.py --sweep model --models resnet18 resnet50 --experiment <name> --notes "<text>"`
 - CSV-driven runs:
   - dry-run: `python scripts/run_experiments_csv.py --experiments-csv configs/experiments_example.csv --dry-run`
   - execute: `python scripts/run_experiments_csv.py --experiments-csv configs/experiments_example.csv`

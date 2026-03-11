@@ -33,7 +33,7 @@ energy-inference/
   scripts/
     bench_cpu.py             # benchmark-only CSV
     extract_features.py      # features-only CSV
-    run_full_cpu.py          # merged benchmark+features CSV
+    run_full.py              # merged benchmark+features CSV
     train_energy_model.py    # simple baseline energy predictor training
     predict_energy.py        # CLI for running predictions with trained energy model
     run_experiments_csv.py   # run multiple experiments from CSV
@@ -67,7 +67,7 @@ pip install -r requirements.txt
 Or run commands without activating:
 
 ```bash
-conda run -n energy-inference python scripts/run_full_cpu.py --help
+conda run -n energy-inference python scripts/run_full.py --help
 ```
 
 ## Jetson (JP6.2) PyTorch setup
@@ -106,7 +106,7 @@ python -c "import torch; print(torch.__version__); print(torch.cuda.is_available
 Run one merged sweep (recommended default):
 
 ```bash
-conda run -n energy-inference python scripts/run_full_cpu.py \
+conda run -n energy-inference python scripts/run_full.py \
   --sweep model \
   --models resnet18 resnet50 \
   --experiment cpu_baseline_model_sweep \
@@ -120,7 +120,7 @@ This will:
 
 ## Scripts and when to use them
 
-- `scripts/run_full_cpu.py`
+- `scripts/run_full.py`
   - use when you want one merged table per run
   - includes: params/FLOPs + latency/FPS + metadata
 - `scripts/bench_cpu.py`
@@ -165,7 +165,7 @@ This will:
 - `scripts/train_energy_model.py`
   - use when you want to train a **simple baseline predictor** for energy consumption from existing run CSVs
   - workflow:
-    - run your normal experiments (e.g., with `scripts/run_full_cpu.py` or `scripts/run_experiments_csv.py`) which produce CSVs under `results/runs/`
+    - run your normal experiments (e.g., with `scripts/run_full.py` or `scripts/run_experiments_csv.py`) which produce CSVs under `results/runs/`
     - manually copy/move the CSVs you want to use for training into `data/training_data/`
       - for example:
         - `cp results/runs/<run_group>/row003_full_jetson_orin_resnet18_resolution_sweep.csv data/training_data/20260304_resolution_sweep.csv`
@@ -268,16 +268,16 @@ python benchmarks/bench.py --sweep model --models resnet18 resnet50
 For detailed commands, naming conventions, and reproducible workflow checklists,
 see `docs/EXPERIMENT_RUNBOOK.md`.
 
-You can also pass a CSV directly to `run_full_cpu.py`:
+You can also pass a CSV directly to `run_full.py`:
 
 ```bash
-python scripts/run_full_cpu.py --experiments-csv configs/experiments_example.csv
+python scripts/run_full.py --experiments-csv configs/experiments_example.csv
 ```
 
 Validate CSV without running:
 
 ```bash
-python scripts/run_full_cpu.py --experiments-csv configs/experiments_example.csv --dry-run
+python scripts/run_full.py --experiments-csv configs/experiments_example.csv --dry-run
 ```
 
 Jetson AGX Orin profile (GPU):

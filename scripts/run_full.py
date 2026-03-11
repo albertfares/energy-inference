@@ -59,7 +59,9 @@ def main() -> None:
     )
     parser.add_argument("--batches", nargs="*", type=int, default=[1, 2, 4, 8])
     parser.add_argument("--resolutions", nargs="*", type=int, default=[224, 320, 384])
-    parser.add_argument("--enable-energy", action="store_true", help="Enable INA3221 hardware power sampling.")
+    parser.add_argument(
+        "--enable-energy", action="store_true", help="Enable INA3221 hardware power sampling."
+    )
 
     args = parser.parse_args()
     if args.experiments_csv:
@@ -111,4 +113,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
