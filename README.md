@@ -11,7 +11,7 @@ extraction, and robust experiment tracking.
 
 ## What this project does (current stage)
 
-- Runs inference benchmarks on vision models (currently supports `resnet18`, `resnet50`, `mobilenet_v3_large`, `mobilenet_v3_small`, `ssdlite320_mobilenet_v3_large`, `vit_b_16`, `swin_t`, `yolov8n`)
+- Runs inference benchmarks on vision models (currently supports `resnet18`, `resnet50`, `mobilenet_v3_large`, `mobilenet_v3_small`, `googlenet`, `shufflenet_v2_x1_0`, `vgg16`, `ssdlite320_mobilenet_v3_large`, `vit_b_16`, `swin_t`, `yolov8n`)
 - Tags each row with `model_task` (`classification` or `detection`) to keep comparisons fair
 - Measures latency and FPS
 - Extracts static features (parameters, FLOPs, metadata)
@@ -36,6 +36,7 @@ energy-inference/
     run_full.py              # merged benchmark+features CSV
     train_energy_model.py    # simple baseline energy predictor training
     predict_energy.py        # CLI for running predictions with trained energy model
+    test_predictor_pipeline.py # interactive terminal loop for predictor testing
     run_experiments_csv.py   # run multiple experiments from CSV
     plot_results.py          # plot one metric vs swept variable
     view_camera.py           # live webcam preview (/dev/videoX)
@@ -149,7 +150,8 @@ conda run -n energy-inference python scripts/run_full.py \
 - `scripts/run_full_cartesian.py`
   - use when you want exhaustive Cartesian benchmarking across model, batch, resolution, and precision
   - defaults:
-    - batches: `1 2 4 8 16 32 64`
+    - models: `resnet18 resnet50 mobilenet_v3_large mobilenet_v3_small googlenet shufflenet_v2_x1_0 vgg16 vit_b_16 swin_t ssdlite yolo`
+    - batches: `1 2 4`
     - resolutions: `160 192 224 256 320 384 448 512 576 640`
     - precisions: `fp32 fp16 bf16`
   - power trace cleanup:
@@ -250,19 +252,28 @@ conda run -n energy-inference python scripts/run_full.py \
         - `cp results/runs/<run_group>/row003_full_jetson_orin_resnet18_resolution_sweep.csv data/training_data/20260304_resolution_sweep.csv`
     - run:
       - `python scripts/train_energy_model.py`
+  - key options:
+    - `--separate-by model_task|model`
+      - `model_task` (default): one regressor per `classification|detection`
+      - `model`: one regressor per model name (e.g., `resnet18`, `yolo`, `ssdlite`)
+    - `--include-model-feature`
+      - adds model one-hot columns when training grouped by `model_task`
+      - ignored when `--separate-by model` (model identity is already separated)
   - behavior:
     - automatically uses **all CSVs** in `data/training_data/` (concatenated) for training
-    - currently trains **task-specific histogram gradient boosting regressors** (via `scikit-learn`) to predict `energy_cpu_J` from static / hyperparameter-derived features only (no measured latency):
+    - trains **histogram gradient boosting regressors** (via `scikit-learn`) to predict `energy_cpu_J` from static / hyperparameter-derived features only (no measured latency):
       - numeric: `flops_total`, `batch`, `resolution`
-      - categorical (one-hot): `model`, `precision` (e.g., `resnet18`, `fp16`)
-      - model split: one regressor for `classification`, one for `detection` (when both are available in data)
+      - categorical (one-hot): `precision` (and optionally `model` with `--include-model-feature`)
+      - grouping split controlled by `--separate-by`:
+        - one regressor per `model_task` or per `model`
     - applies `log1p` target transform during training and `expm1` at inference, then clips predictions at `>= 0` for physical plausibility
     - prints basic evaluation metrics on a held-out test split:
       - R², MAE (J), and the learned coefficients / intercept
     - saves a serialized model payload under `results/models/energy_cpu_linear.joblib` containing:
-      - the trained model
-      - the feature name list
-      - the target name (`energy_cpu_J`)
+      - grouping metadata (`group_by`)
+      - grouped estimators (`models_by_group`)
+      - grouped feature schemas (`feature_names_by_group`)
+      - target name (`energy_cpu_J`) and target transform metadata
   - example of using the saved model for inference in Python:
     - ```python
       from joblib import load
@@ -312,8 +323,17 @@ conda run -n energy-inference python scripts/run_full.py \
     - loads the Joblib payload from `results/models/energy_cpu_linear.joblib` (or `--model-path`)
     - constructs a single-row input with features:
       - `flops_total`, `batch`, `resolution`, and model/precision one-hot fields expected by the saved model schema
-    - auto-selects task-specific model from `--model` (`classification`/`detection`) unless overridden via `--model-task`
+    - auto-selects grouped estimator based on saved `group_by` metadata:
+      - if grouped by `model`, selects by `--model`
+      - if grouped by `model_task`, selects `classification|detection` (auto or `--model-task`)
     - prints the predicted `energy_cpu_J` to stdout
+- `scripts/test_predictor_pipeline.py`
+  - use when you want an interactive terminal loop to test many predictor inputs quickly
+  - prompts one-by-one for:
+    - `model`, `flops_total`, `batch`, `resolution`, `precision`, optional `model_task` override
+  - supports grouped predictor payloads (`group_by=model` or `group_by=model_task`)
+  - example:
+    - `python scripts/test_predictor_pipeline.py --model-path results/models/energy_cpu_linear.joblib`
 - `scripts/run_experiments_csv.py`
   - use when you want to run many experiments from a CSV template
   - example:
