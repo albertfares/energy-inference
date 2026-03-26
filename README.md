@@ -38,6 +38,8 @@ energy-inference/
     predict_energy.py        # CLI for running predictions with trained energy model
     run_experiments_csv.py   # run multiple experiments from CSV
     plot_results.py          # plot one metric vs swept variable
+    view_camera.py           # live webcam preview (/dev/videoX)
+    live_detect_ssdlite.py   # live webcam object detection with SSDLite
   benchmarks/
     bench.py                 # legacy wrapper
     benchmark.py             # legacy wrapper
@@ -144,6 +146,18 @@ conda run -n energy-inference python scripts/run_full.py \
   - use when you only want model/config features
   - sweep axes: `model`, `batch`, `resolution`, `precision`
   - precision list arg for precision sweep: `--precisions fp32 fp16 bf16`
+- `scripts/run_full_cartesian.py`
+  - use when you want exhaustive Cartesian benchmarking across model, batch, resolution, and precision
+  - defaults:
+    - batches: `1 2 4 8 16 32 64`
+    - resolutions: `160 192 224 256 320 384 448 512 576 640`
+    - precisions: `fp32 fp16 bf16`
+  - power trace cleanup:
+    - by default, deletes `*_power_trace.csv` after integrating energy into the final CSV
+    - pass `--keep-power-trace` to preserve traces
+  - resume support:
+    - pass `--resume-csv <existing_csv>` to skip already present combinations and continue
+    - pass `--rerun-failed` with resume mode to retry rows previously marked as `failed`
 - `scripts/plot_results.py`
   - use when you want a quick plot from one run CSV
   - auto-detects x-axis from `sweep_param`
@@ -179,6 +193,54 @@ conda run -n energy-inference python scripts/run_full.py \
       - `--title TITLE`: optional plot title.
       - `--show`: open an interactive window in addition to saving the PNG.
       - `--dpi DPI`: output figure DPI (default: `150`).
+- `scripts/plot_training_data_insights.py`
+  - use when you want broader training-data analytics (plots + summary CSV tables) from `data/training_data/`
+  - cartesian-compatible by default:
+    - treats `sweep_param=cartesian` as valid for batch/resolution/precision analyses
+    - also remains compatible with legacy single-axis sweep CSVs
+  - example:
+    - `python scripts/plot_training_data_insights.py --data-dir data/training_data --out-dir results/plots`
+- `scripts/view_camera.py`
+  - use when you want a quick live preview from a webcam (`/dev/videoX`)
+  - default device: `0` (maps to `/dev/video0`)
+  - quit key: press `q` in the preview window
+  - example:
+    - `python scripts/view_camera.py --device 0 --width 1280 --height 720 --fps 30`
+- `scripts/live_detect_ssdlite.py`
+  - use when you want live object detection from webcam frames with selectable models
+  - supported detection models (`--model`):
+    - `ssdlite320_mobilenet_v3_large`
+    - `fasterrcnn_mobilenet_v3_large_320_fpn`
+    - `fasterrcnn_resnet50_fpn_v2`
+    - `retinanet_resnet50_fpn_v2`
+    - `fcos_resnet50_fpn`
+    - `yolov8n`
+  - tunable hyperparameters:
+    - `--score-threshold`
+    - `--max-detections`
+    - `--yolo-imgsz` and `--iou-threshold` (YOLO-specific)
+  - works in SSH/headless mode by printing detections to terminal
+  - add `--show` for an annotated preview window when running on a GUI desktop session
+  - supports two remote streaming modes:
+    - MJPEG over HTTP (`--serve-mjpeg`) for browser viewing over SSH port-forward
+    - RTP/H264 (`--stream-rtp`) for `ffplay` workflows
+  - example (headless):
+    - `python scripts/live_detect_ssdlite.py --device 0 --model ssdlite320_mobilenet_v3_large --score-threshold 0.5`
+  - example (YOLO headless):
+    - `python scripts/live_detect_ssdlite.py --device 0 --model yolov8n --score-threshold 0.35 --iou-threshold 0.45 --yolo-imgsz 640`
+  - example (GUI):
+    - `python scripts/live_detect_ssdlite.py --device 0 --show`
+  - example (Mac over SSH, live video in browser):
+    - on Mac (new terminal): `ssh -L 8080:127.0.0.1:8080 <user>@<jetson-ip>`
+    - on Jetson (inside SSH): `python scripts/live_detect_ssdlite.py --device 0 --serve-mjpeg --mjpeg-host 127.0.0.1 --mjpeg-port 8080`
+    - open `http://127.0.0.1:8080` on Mac
+  - example (RTP/H264 to ffplay):
+    - on Jetson: `python scripts/live_detect_ssdlite.py --device 0 --stream-rtp --rtp-host <mac-ip> --rtp-port 11111 --rtp-sdp /tmp/jetson.sdp`
+    - copy the generated `/tmp/jetson.sdp` from Jetson to Mac, then run:
+      - `ffplay -protocol_whitelist file,udp,rtp -i jetson.sdp`
+  - live power + energy telemetry while detecting:
+    - `python scripts/live_detect_ssdlite.py --device 0 --stream-rtp --rtp-host <mac-ip> --rtp-port 11111 --rtp-sdp /tmp/jetson.sdp --enable-energy --ina-hz 1000 --ina-hw all`
+  - step-by-step setup guide: `docs/CAMERA_STREAMING_JETSON_TO_MAC.md`
 - `scripts/train_energy_model.py`
   - use when you want to train a **simple baseline predictor** for energy consumption from existing run CSVs
   - workflow:
@@ -190,9 +252,11 @@ conda run -n energy-inference python scripts/run_full.py \
       - `python scripts/train_energy_model.py`
   - behavior:
     - automatically uses **all CSVs** in `data/training_data/` (concatenated) for training
-    - currently trains a **linear regression model** (via `scikit-learn`) to predict `energy_cpu_J` from static / hyperparameter-derived features only (no measured latency):
+    - currently trains **task-specific histogram gradient boosting regressors** (via `scikit-learn`) to predict `energy_cpu_J` from static / hyperparameter-derived features only (no measured latency):
       - numeric: `flops_total`, `batch`, `resolution`
-      - categorical (one-hot): `precision` (e.g., `fp32`, `fp16`, `bf16`)
+      - categorical (one-hot): `model`, `precision` (e.g., `resnet18`, `fp16`)
+      - model split: one regressor for `classification`, one for `detection` (when both are available in data)
+    - applies `log1p` target transform during training and `expm1` at inference, then clips predictions at `>= 0` for physical plausibility
     - prints basic evaluation metrics on a held-out test split:
       - R², MAE (J), and the learned coefficients / intercept
     - saves a serialized model payload under `results/models/energy_cpu_linear.joblib` containing:
@@ -204,18 +268,31 @@ conda run -n energy-inference python scripts/run_full.py \
       from joblib import load
 
       payload = load("results/models/energy_cpu_linear.joblib")
-      model = payload["model"]
-      feature_names = payload["feature_names"]  # e.g., ["flops_total", "batch", "resolution", "precision_fp16", ...]
+      models_by_task = payload.get("models_by_task")
+      feature_names_by_task = payload.get("feature_names_by_task")
+      model = models_by_task["classification"] if models_by_task else payload["model"]
+      feature_names = (
+          feature_names_by_task["classification"]
+          if feature_names_by_task
+          else payload["feature_names"]
+      )  # e.g., ["flops_total", "batch", "resolution", "model_resnet18", "precision_fp16", ...]
+      target_transform = payload.get("target_transform", "none")
 
       # X_new must be a 2D array / DataFrame with these columns, in this order.
       import pandas as pd
       row = {"flops_total": 3.8e10, "batch": 1, "resolution": 640}
       for f in feature_names:
+          if f.startswith("model_"):
+              row[f] = 1.0 if f == "model_resnet18" else 0.0
           if f.startswith("precision_"):
               row[f] = 1.0 if f == "precision_fp16" else 0.0
       X_new = pd.DataFrame([row]).reindex(columns=feature_names, fill_value=0.0)
-      y_pred = model.predict(X_new)
-      print("Predicted energy_cpu_J:", y_pred[0])
+      import math
+      y_pred = float(model.predict(X_new)[0])
+      if target_transform == "log1p":
+          y_pred = math.expm1(y_pred)
+      y_pred = max(y_pred, 0.0)
+      print("Predicted energy_cpu_J:", y_pred)
       ```
 - `scripts/predict_energy.py`
   - use when you want a **small CLI** to query the trained energy predictor
@@ -225,14 +302,17 @@ conda run -n energy-inference python scripts/run_full.py \
     - ```bash
       python scripts/predict_energy.py \
         --flops-total 3.8004576256e10 \
+        --model resnet18 \
         --batch 1 \
         --resolution 640 \
-        --precision fp16
+        --precision fp16 \
+        --model-task classification
       ```
   - behavior:
     - loads the Joblib payload from `results/models/energy_cpu_linear.joblib` (or `--model-path`)
     - constructs a single-row input with features:
-      - `flops_total`, `batch`, `resolution`, and precision one-hot fields expected by the saved model schema
+      - `flops_total`, `batch`, `resolution`, and model/precision one-hot fields expected by the saved model schema
+    - auto-selects task-specific model from `--model` (`classification`/`detection`) unless overridden via `--model-task`
     - prints the predicted `energy_cpu_J` to stdout
 - `scripts/run_experiments_csv.py`
   - use when you want to run many experiments from a CSV template
