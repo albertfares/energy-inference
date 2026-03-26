@@ -13,6 +13,12 @@ def infer_model_family(model_name: str) -> str:
         return "resnet"
     if "mobilenet" in name:
         return "mobilenet"
+    if "googlenet" in name or "inception" in name:
+        return "inception"
+    if "shufflenet" in name:
+        return "shufflenet"
+    if "vgg" in name or "vdd" in name:
+        return "vgg"
     if "ssd" in name:
         return "ssd"
     if "efficientnet" in name:

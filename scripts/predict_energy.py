@@ -14,10 +14,33 @@ def load_model(model_path: Path):
     if not model_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_path}")
     payload = load(model_path)
-    model = payload["model"]
-    feature_names = payload["feature_names"]
+    model = payload.get("model")
+    feature_names = payload.get("feature_names")
+    group_by = payload.get("group_by")
+    models_by_group = payload.get("models_by_group")
+    feature_names_by_group = payload.get("feature_names_by_group")
+    models_by_task = payload.get("models_by_task")
+    feature_names_by_task = payload.get("feature_names_by_task")
     target = payload.get("target", "energy_cpu_J")
-    return model, feature_names, target
+    target_transform = payload.get("target_transform", "none")
+    return (
+        model,
+        feature_names,
+        group_by,
+        models_by_group,
+        feature_names_by_group,
+        models_by_task,
+        feature_names_by_task,
+        target,
+        target_transform,
+    )
+
+
+def infer_model_task(model_name: str) -> str:
+    name = model_name.lower()
+    if "ssd" in name or "yolo" in name or "rcnn" in name:
+        return "detection"
+    return "classification"
 
 
 def predict_single(
@@ -27,28 +50,38 @@ def predict_single(
     flops_total: float,
     batch: int,
     resolution: int,
+    model_name: str,
     precision: str,
+    target_transform: str = "none",
 ) -> float:
     row = {
         "flops_total": flops_total,
         "batch": batch,
         "resolution": resolution,
     }
+    model_key = f"model_{model_name.lower().strip()}"
     precision_key = f"precision_{precision.lower().strip()}"
     for feature in feature_names:
+        if feature.startswith("model_"):
+            row[feature] = 1.0 if feature == model_key else 0.0
         if feature.startswith("precision_"):
             row[feature] = 1.0 if feature == precision_key else 0.0
 
     data = pd.DataFrame([row]).reindex(columns=feature_names, fill_value=0.0)
     y_pred = model.predict(data)
-    return float(y_pred[0])
+    value = float(y_pred[0])
+    if target_transform == "log1p":
+        import math
+
+        value = math.expm1(value)
+    return max(value, 0.0)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Predict CPU energy (J) using a trained linear model and static "
-            "features: flops_total, batch, resolution, precision."
+            "features: model, flops_total, batch, resolution, precision."
         )
     )
     parser.add_argument(
@@ -62,6 +95,12 @@ def main() -> None:
         type=float,
         required=True,
         help="Total FLOPs for the configuration.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        help="Model name (e.g., resnet18, vit_b_16, yolov8n).",
     )
     parser.add_argument(
         "--batch",
@@ -81,18 +120,72 @@ def main() -> None:
         default="fp32",
         help="Precision label (e.g., fp32, fp16, bf16).",
     )
+    parser.add_argument(
+        "--model-task",
+        type=str,
+        default=None,
+        choices=["classification", "detection"],
+        help="Optional override for task-specific model selection.",
+    )
 
     args = parser.parse_args()
 
     try:
-        model, feature_names, target = load_model(Path(args.model_path))
-        y_pred = predict_single(
+        (
             model,
             feature_names,
+            group_by,
+            models_by_group,
+            feature_names_by_group,
+            models_by_task,
+            feature_names_by_task,
+            target,
+            target_transform,
+        ) = load_model(Path(args.model_path))
+
+        selected_task = (args.model_task or infer_model_task(args.model)).strip().lower()
+        selected_model_name = args.model.strip().lower()
+
+        if (
+            group_by is not None
+            and models_by_group is not None
+            and feature_names_by_group is not None
+        ):
+            if group_by == "model":
+                key = selected_model_name
+            else:
+                key = selected_task
+            if key not in models_by_group:
+                raise ValueError(
+                    f"{group_by} '{key}' is not available in the saved model. "
+                    f"Available: {sorted(models_by_group.keys())}"
+                )
+            selected_model = models_by_group[key]
+            selected_feature_names = feature_names_by_group[key]
+        elif models_by_task is not None and feature_names_by_task is not None:
+            if selected_task not in models_by_task:
+                raise ValueError(
+                    f"Task '{selected_task}' is not available in the saved model. "
+                    f"Available: {sorted(models_by_task.keys())}"
+                )
+            selected_model = models_by_task[selected_task]
+            selected_feature_names = feature_names_by_task[selected_task]
+        else:
+            selected_model = model
+            selected_feature_names = feature_names
+
+        if selected_model is None or selected_feature_names is None:
+            raise ValueError("Loaded model payload is missing model or feature schema.")
+
+        y_pred = predict_single(
+            selected_model,
+            selected_feature_names,
             flops_total=args.flops_total,
             batch=args.batch,
             resolution=args.resolution,
+            model_name=args.model,
             precision=args.precision,
+            target_transform=target_transform,
         )
         print(f"Predicted {target}: {y_pred:.6f}")
     except Exception as exc:  # noqa: BLE001
