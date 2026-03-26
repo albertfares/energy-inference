@@ -52,6 +52,12 @@ def get_model(name: str) -> torch.nn.Module:
         return models.mobilenet_v3_large(weights=None)
     if model_name in {"mobilenet_v3_small", "mobilenetv3_small"}:
         return models.mobilenet_v3_small(weights=None)
+    if model_name in {"googlenet", "inception_v1"}:
+        return models.googlenet(weights=None, aux_logits=False)
+    if model_name in {"shufflenet", "shufflenet_v2_x1_0", "shufflenetv2"}:
+        return models.shufflenet_v2_x1_0(weights=None)
+    if model_name in {"vgg16", "vgg", "vdd"}:
+        return models.vgg16(weights=None)
     if model_name in {"ssdlite", "ssdlite320", "ssdlite320_mobilenet_v3_large"}:
         return _SSDLiteBatchWrapper()
     if model_name in {"vit_b_16", "vit", "vit-b-16"}:
@@ -64,7 +70,7 @@ def get_model(name: str) -> torch.nn.Module:
     raise ValueError(
         "Unknown model: "
         f"{name}. Supported: resnet18, resnet50, mobilenet_v3_large, "
-        "mobilenet_v3_small, ssdlite320_mobilenet_v3_large, vit_b_16, "
-        "swin_t, yolov8n."
+        "mobilenet_v3_small, googlenet, shufflenet_v2_x1_0, vgg16, "
+        "ssdlite320_mobilenet_v3_large, vit_b_16, swin_t, yolov8n."
     )
 

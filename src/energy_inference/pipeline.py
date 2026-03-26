@@ -400,16 +400,20 @@ def run_cpu_sweep(
 
         try:
             num_params = count_parameters(curr_model)
+            # Use a separate model instance for FLOPs profiling so THOP hooks
+            # cannot contaminate the benchmark model used for timed inference.
+            flops_model = get_model(model_name).to(torch_device).eval()
             (
                 macs_total,
                 flops_total_strict,
                 unsupported_ops_count,
             ) = compute_flops(
-                model=curr_model,
+                model=flops_model,
                 batch=curr_batch,
                 resolution=curr_resolution,
                 device=torch_device,
             )
+            del flops_model
             # Keep legacy `flops_total` as strict FLOPs for publication clarity.
             flops_total = flops_total_strict
             flops_per_sample = flops_total_strict / max(curr_batch, 1)
