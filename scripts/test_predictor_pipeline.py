@@ -30,12 +30,41 @@ def infer_model_task(model_name: str) -> str:
 def select_model_and_features(
     payload: dict,
     *,
+    target_name: str,
     model_name: str,
     model_task_override: str | None,
 ):
+    group_by = payload.get("group_by")
+    models_by_group_by_target = payload.get("models_by_group_by_target")
+    feature_names_by_group_by_target = payload.get("feature_names_by_group_by_target")
+
+    # New multi-target format.
+    if (
+        isinstance(models_by_group_by_target, dict)
+        and isinstance(feature_names_by_group_by_target, dict)
+    ):
+        models_by_group = models_by_group_by_target.get(target_name)
+        feature_names_by_group = feature_names_by_group_by_target.get(target_name)
+        if not isinstance(models_by_group, dict) or not isinstance(feature_names_by_group, dict):
+            raise ValueError(
+                f"target '{target_name}' not available in saved model. "
+                f"Available: {sorted(models_by_group_by_target.keys())}"
+            )
+
+        selected_task = (model_task_override or infer_model_task(model_name)).strip().lower()
+        selected_model_name = model_name.strip().lower()
+        key = selected_model_name if group_by == "model" else selected_task
+        if key not in models_by_group:
+            available = sorted(models_by_group.keys())
+            raise ValueError(
+                f"{group_by} '{key}' not available for target '{target_name}'. "
+                f"Available: {available}"
+            )
+        return models_by_group[key], feature_names_by_group[key]
+
+    # Backward-compatible single-target format.
     model = payload.get("model")
     feature_names = payload.get("feature_names")
-    group_by = payload.get("group_by")
     models_by_group = payload.get("models_by_group")
     feature_names_by_group = payload.get("feature_names_by_group")
     models_by_task = payload.get("models_by_task")
@@ -144,11 +173,19 @@ def main() -> None:
         print(f"Failed to load model: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    target = str(payload.get("target", "energy_cpu_J"))
-    target_transform = str(payload.get("target_transform", "none"))
+    targets = payload.get("targets")
+    if not isinstance(targets, list) or not targets:
+        targets = [str(payload.get("target", "energy_cpu_J"))]
+    targets = [str(t) for t in targets]
+
+    target_transforms = payload.get("target_transforms")
+    if not isinstance(target_transforms, dict):
+        default_transform = str(payload.get("target_transform", "none"))
+        target_transforms = {t: default_transform for t in targets}
+
     group_by = payload.get("group_by", "single")
     print(f"Loaded predictor: {args.model_path}")
-    print(f"target={target}, target_transform={target_transform}, grouping={group_by}")
+    print(f"targets={targets}, grouping={group_by}")
     print("Type 'q' at the model prompt to exit.")
 
     while True:
@@ -169,22 +206,24 @@ def main() -> None:
             model_task_override = None
 
         try:
-            selected_model, selected_feature_names = select_model_and_features(
-                payload,
-                model_name=model_name,
-                model_task_override=model_task_override,
-            )
-            pred = predict_energy_cpu_j(
-                selected_model,
-                selected_feature_names,
-                flops_total=flops_total,
-                batch=batch,
-                resolution=resolution,
-                model_name=model_name,
-                precision=precision,
-                target_transform=target_transform,
-            )
-            print(f"Predicted {target}: {pred:.6f} J")
+            for target_name in targets:
+                selected_model, selected_feature_names = select_model_and_features(
+                    payload,
+                    target_name=target_name,
+                    model_name=model_name,
+                    model_task_override=model_task_override,
+                )
+                pred = predict_energy_cpu_j(
+                    selected_model,
+                    selected_feature_names,
+                    flops_total=flops_total,
+                    batch=batch,
+                    resolution=resolution,
+                    model_name=model_name,
+                    precision=precision,
+                    target_transform=str(target_transforms.get(target_name, "none")),
+                )
+                print(f"Predicted {target_name}: {pred:.6f} J")
         except Exception as exc:  # noqa: BLE001
             print(f"Prediction failed: {exc}", file=sys.stderr)
 
