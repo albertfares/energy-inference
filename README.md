@@ -261,7 +261,12 @@ conda run -n energy-inference python scripts/run_full.py \
       - ignored when `--separate-by model` (model identity is already separated)
   - behavior:
     - automatically uses **all CSVs** in `data/training_data/` (concatenated) for training
-    - trains **histogram gradient boosting regressors** (via `scikit-learn`) to predict `energy_cpu_J` from static / hyperparameter-derived features only (no measured latency):
+    - trains **histogram gradient boosting regressors** (via `scikit-learn`) to predict four targets from static / hyperparameter-derived features only (no measured latency):
+      - `energy_cpu_J`
+      - `energy_gpu_J`
+      - `energy_io_J`
+      - `energy_total_J` (computed as cpu+gpu+io if not already present in CSV)
+    - each target is trained with the same feature schema:
       - numeric: `flops_total`, `batch`, `resolution`
       - categorical (one-hot): `precision` (and optionally `model` with `--include-model-feature`)
       - grouping split controlled by `--separate-by`:
@@ -271,9 +276,9 @@ conda run -n energy-inference python scripts/run_full.py \
       - R², MAE (J), and the learned coefficients / intercept
     - saves a serialized model payload under `results/models/energy_cpu_linear.joblib` containing:
       - grouping metadata (`group_by`)
-      - grouped estimators (`models_by_group`)
-      - grouped feature schemas (`feature_names_by_group`)
-      - target name (`energy_cpu_J`) and target transform metadata
+      - grouped estimators/feature schemas per target (`models_by_group_by_target`, `feature_names_by_group_by_target`)
+      - target list and per-target transform metadata (`targets`, `target_transforms`)
+      - backward-compatible CPU aliases (`models_by_group`, `feature_names_by_group`, `target`, `target_transform`)
   - example of using the saved model for inference in Python:
     - ```python
       from joblib import load
@@ -326,14 +331,49 @@ conda run -n energy-inference python scripts/run_full.py \
     - auto-selects grouped estimator based on saved `group_by` metadata:
       - if grouped by `model`, selects by `--model`
       - if grouped by `model_task`, selects `classification|detection` (auto or `--model-task`)
-    - prints the predicted `energy_cpu_J` to stdout
+    - prints predictions for all available energy targets (`energy_cpu_J`, `energy_gpu_J`, `energy_io_J`, `energy_total_J`)
+      - optionally restrict with `--targets`
 - `scripts/test_predictor_pipeline.py`
   - use when you want an interactive terminal loop to test many predictor inputs quickly
   - prompts one-by-one for:
     - `model`, `flops_total`, `batch`, `resolution`, `precision`, optional `model_task` override
   - supports grouped predictor payloads (`group_by=model` or `group_by=model_task`)
+  - prints all available target predictions for each prompted configuration
   - example:
     - `python scripts/test_predictor_pipeline.py --model-path results/models/energy_cpu_linear.joblib`
+- `scripts/analyze_predictor_holdout.py`
+  - use when you want to reconstruct the training script's deterministic 75/25 split and evaluate the saved predictor on the reconstructed 25% holdout
+  - expected inputs:
+    - training CSV used for fitting (default: `data/training_data/filtred_data.csv`)
+    - saved predictor payload (default: `results/models/energy_cpu_linear.joblib`)
+    - evaluation target via `--target`:
+      - `energy_cpu_J` (default)
+      - `energy_gpu_J`
+      - `energy_io_J`
+      - `energy_total_J`
+      - `all` (run all available targets from the payload)
+  - outputs (under `results/analysis/predictor_holdout_<timestamp>/`):
+    - `reconstructed_train_rows.csv`, `reconstructed_test_rows.csv`
+    - `holdout_predictions.csv`
+    - `metrics_overall.csv`, `metrics_by_model.csv`
+    - `predictor_error_by_model_batch.csv`
+    - `predictor_error_by_model_resolution.csv`
+    - `predictor_error_by_model_precision.csv`
+    - `predictor_error_by_model_full_config.csv`
+    - `predictor_best_configs_per_model.csv`
+    - `predictor_worst_configs_per_model.csv`
+    - `predictor_error_by_model_batch_resolution.csv`
+    - `predictor_error_by_model_batch_precision.csv`
+    - `predictor_error_by_model_resolution_precision.csv`
+    - `predictor_interaction_importance_per_model.csv`
+  - extra options:
+    - `--target` target column to evaluate, or `all` (default: `energy_cpu_J`)
+    - `--min-count-config` minimum rows per joint config for best/worst ranking (default: `2`)
+    - `--top-n-configs` number of best/worst joint configs saved per model (default: `5`)
+  - when `--target all` is used:
+    - creates one subdirectory per target under the output root (e.g., `.../energy_cpu_J/`, `.../energy_gpu_J/`)
+  - example:
+    - `python scripts/analyze_predictor_holdout.py --input-csv data/training_data/filtred_data.csv --model-path results/models/energy_cpu_linear.joblib`
 - `scripts/run_experiments_csv.py`
   - use when you want to run many experiments from a CSV template
   - example:
