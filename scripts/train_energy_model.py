@@ -44,6 +44,7 @@ def build_feature_matrix(
     df: pd.DataFrame,
     *,
     include_model_feature: bool,
+    target_col: str,
 ) -> tuple[pd.DataFrame, pd.Series]:
     """
     Build a simple feature matrix X and target y for energy prediction.
@@ -52,7 +53,7 @@ def build_feature_matrix(
     model / hyperparameter-derived features (no measured latency):
     model identity, FLOPs, batch size, input resolution, and precision.
     """
-    required_columns = ["energy_cpu_J", "flops_total", "batch", "resolution", "precision"]
+    required_columns = [target_col, "flops_total", "batch", "resolution", "precision"]
     if include_model_feature:
         required_columns.append("model")
     missing = [c for c in required_columns if c not in df.columns]
@@ -78,7 +79,7 @@ def build_feature_matrix(
         X_model = pd.get_dummies(df["model"], prefix="model")
         feature_frames.append(X_model)
     X = pd.concat(feature_frames, axis=1)
-    y = df["energy_cpu_J"]
+    y = df[target_col]
     return X, y
 
 
@@ -122,8 +123,17 @@ def main() -> None:
 
     estimator = "hgb"
     use_log_target = True
+    target_cols = ["energy_cpu_J", "energy_gpu_J", "energy_io_J", "energy_total_J"]
     try:
         df = load_training_data()
+        if "energy_total_J" not in df.columns:
+            component_cols = ["energy_cpu_J", "energy_gpu_J", "energy_io_J"]
+            if all(col in df.columns for col in component_cols):
+                df = df.copy()
+                for col in component_cols:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                df["energy_total_J"] = df[component_cols].sum(axis=1, min_count=1)
+
         if "model_task" not in df.columns:
             if "model" not in df.columns:
                 raise ValueError(
@@ -136,78 +146,110 @@ def main() -> None:
             raise ValueError("Training data must include 'model' to use --separate-by model.")
 
         group_col = args.separate_by
-        models_by_group: dict[str, object] = {}
-        feature_names_by_group: dict[str, list[str]] = {}
+        missing_targets = [c for c in target_cols if c not in df.columns]
+        if missing_targets:
+            raise ValueError(
+                "Training data is missing required energy targets: "
+                f"{missing_targets}. Expected: {target_cols}"
+            )
+
+        models_by_group_by_target: dict[str, dict[str, object]] = {
+            target: {} for target in target_cols
+        }
+        feature_names_by_group_by_target: dict[str, dict[str, list[str]]] = {
+            target: {} for target in target_cols
+        }
         metrics_rows: list[dict[str, object]] = []
 
-        for group_name_raw, group_df in df.groupby(group_col):
-            group_name = str(group_name_raw).strip().lower()
-            if not group_name:
-                continue
+        for target_col in target_cols:
+            for group_name_raw, group_df in df.groupby(group_col):
+                group_name = str(group_name_raw).strip().lower()
+                if not group_name:
+                    continue
 
-            group_df = group_df.copy()
-            X, y = build_feature_matrix(
-                group_df,
-                include_model_feature=(
-                    args.include_model_feature and args.separate_by != "model"
-                ),
-            )
-            if len(X) < 6:
-                print(
-                    f"Skipping {group_col}='{group_name}' due to too few rows for train/test split: {len(X)}"
+                group_df = group_df.copy()
+                X, y = build_feature_matrix(
+                    group_df,
+                    include_model_feature=(
+                        args.include_model_feature and args.separate_by != "model"
+                    ),
+                    target_col=target_col,
                 )
-                continue
+                if len(X) < 6:
+                    print(
+                        f"Skipping target='{target_col}' {group_col}='{group_name}' "
+                        f"due to too few rows for train/test split: {len(X)}"
+                    )
+                    continue
 
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.25, random_state=42
-            )
-            model = _create_estimator(estimator)
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X, y, test_size=0.25, random_state=42
+                )
+                model = _create_estimator(estimator)
 
-            y_train_fit = np.log1p(y_train) if use_log_target else y_train
-            model.fit(X_train, y_train_fit)
-            y_pred_raw = model.predict(X_test)
-            y_pred = np.expm1(y_pred_raw) if use_log_target else y_pred_raw
-            y_pred = np.maximum(y_pred, 0.0)
+                y_train_fit = np.log1p(y_train) if use_log_target else y_train
+                model.fit(X_train, y_train_fit)
+                y_pred_raw = model.predict(X_test)
+                y_pred = np.expm1(y_pred_raw) if use_log_target else y_pred_raw
+                y_pred = np.maximum(y_pred, 0.0)
 
-            r2 = r2_score(y_test, y_pred)
-            mae = mean_absolute_error(y_test, y_pred)
-            metrics_rows.append(
-                {
-                    "group_by": group_col,
-                    "group": group_name,
-                    "rows": len(X),
-                    "r2": r2,
-                    "mae_j": mae,
-                }
-            )
-            models_by_group[group_name] = model
-            feature_names_by_group[group_name] = list(X.columns)
+                r2 = r2_score(y_test, y_pred)
+                mae = mean_absolute_error(y_test, y_pred)
+                metrics_rows.append(
+                    {
+                        "target": target_col,
+                        "group_by": group_col,
+                        "group": group_name,
+                        "rows": len(X),
+                        "r2": r2,
+                        "mae_j": mae,
+                    }
+                )
+                models_by_group_by_target[target_col][group_name] = model
+                feature_names_by_group_by_target[target_col][group_name] = list(X.columns)
 
-        if not models_by_group:
-            raise ValueError("No group-specific models were trained.")
+        trained_targets = [
+            target for target, grouped in models_by_group_by_target.items() if grouped
+        ]
+        if not trained_targets:
+            raise ValueError("No group-specific models were trained for any target.")
 
-        print(f"Per-{group_col} metrics:")
+        print(f"Per-{group_col}, per-target metrics:")
         for m in metrics_rows:
             print(
-                f"  {group_col}={m['group']} rows={m['rows']} "
+                f"  target={m['target']} {group_col}={m['group']} rows={m['rows']} "
                 f"R^2={m['r2']:.4f} MAE={m['mae_j']:.6f} J"
             )
 
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        cpu_models = models_by_group_by_target.get("energy_cpu_J", {})
+        cpu_features = feature_names_by_group_by_target.get("energy_cpu_J", {})
         payload = {
-            "models_by_group": models_by_group,
-            "feature_names_by_group": feature_names_by_group,
+            "models_by_group_by_target": models_by_group_by_target,
+            "feature_names_by_group_by_target": feature_names_by_group_by_target,
             "group_by": group_col,
+            "targets": trained_targets,
+            "target_transforms": {
+                target: ("log1p" if use_log_target else "none") for target in trained_targets
+            },
             # Backward-compatible aliases for older predictor versions.
-            "models_by_task": models_by_group if group_col == "model_task" else None,
-            "feature_names_by_task": feature_names_by_group if group_col == "model_task" else None,
+            "models_by_group": cpu_models if cpu_models else None,
+            "feature_names_by_group": cpu_features if cpu_features else None,
+            "models_by_task": cpu_models if group_col == "model_task" else None,
+            "feature_names_by_task": cpu_features if group_col == "model_task" else None,
             "target": "energy_cpu_J",
             "target_transform": "log1p" if use_log_target else "none",
             "estimator": estimator,
             "include_model_feature": bool(
                 args.include_model_feature and args.separate_by != "model"
             ),
-            "groups": sorted(models_by_group.keys()),
+            "groups": sorted(
+                {
+                    group
+                    for grouped_models in models_by_group_by_target.values()
+                    for group in grouped_models.keys()
+                }
+            ),
         }
         dump(payload, MODEL_PATH)
         print(f"Saved model to: {MODEL_PATH}")
