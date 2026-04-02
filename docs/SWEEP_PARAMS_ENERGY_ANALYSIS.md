@@ -76,7 +76,7 @@ All four metrics are measured over the 200-iteration timed window:
 
 ![Energy component breakdown per model](figures/fig03_energy_stacked.png)
 
-### 2.1 Energy Rankings (mean across all sweeps)
+### 1.1 Energy Rankings (mean across all sweeps)
 
 | Model | CPU (J) | GPU (J) | I/O (J) | Total (J) | Power (W) |
 |---|---|---|---|---|---|
@@ -92,7 +92,7 @@ All four metrics are measured over the 200-iteration timed window:
 | mobilenet_v3_small | 9.57 | 29.59 | 19.47 | 58.6 | 13.62 |
 | resnet18 | 5.59 | 38.32 | 15.97 | 59.9 | 23.47 |
 
-### 2.2 Energy Component Proportions (CPU / GPU / I/O)
+### 1.2 Energy Component Proportions (CPU / GPU / I/O)
 
 | Model | CPU % | GPU % | I/O % |
 |---|---|---|---|
@@ -467,7 +467,7 @@ This project currently trains per-model or per-family predictors, making `macs_t
 |---|---|
 | GPU energy is 4–8× CPU energy on CUDA — GPU dominates total budget | Don't focus only on CPU energy; it's the smallest channel |
 | I/O energy (22–34% of total) is large and often ignored in theory | Must be modelled, not discarded |
-| Batch scales energy near-linearly for SSDLite (CPU NMS bottleneck) and VGG16 (high baseline GPU occupancy), flat for MobileNet/YOLO (GPU massively underutilised — latency invariant to batch) | Batch is not a universal predictor feature — the mechanism differs per model |
+| Batch scaling differs strongly by model: near-linear for SSDLite/VGG16 and near-flat for MobileNet/YOLO in this benchmark setup; plausible causes include postprocess/runtime overheads vs overhead amortisation, but these mechanisms are interpretive without profiler confirmation | Batch is not a universal predictor feature — model-specific tuning is required |
 | Resolution affects power and GPU energy significantly (r=0.34, 0.22) but barely affects CPU energy (r=0.05) | Resolution is a useful feature for GPU/power prediction |
 | Reduced precision cuts GPU energy by ~20% overall, up to ~52% for Swin-T | Precision is critical for transformer energy modelling |
 | Small models (MobileNet, YOLO) can be *worse* in fp16 for CPU energy | Precision effect must be modelled per model family |
