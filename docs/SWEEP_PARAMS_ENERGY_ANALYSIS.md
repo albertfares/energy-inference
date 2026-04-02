@@ -244,7 +244,8 @@ The heatmap (fig10) reveals stark differences:
 
 ### 4.1 Precision Effect by Model
 
-The precision effect is **strongly model-dependent**:
+The precision effect is **strongly model-dependent**.  
+Transformers show the largest and most consistent gains, but the effect is **not transformer-only**: some heavier CNNs (e.g., ResNet50, VGG16) also show substantial reductions, while several lightweight/depthwise models show weak gains or regressions.
 
 **Transformers (Swin-T, ViT-B/16)** — very large gains from reduced precision:
 
@@ -255,7 +256,8 @@ The precision effect is **strongly model-dependent**:
 | swin_t | CPU energy | 36.92 J | 24.94 J | 24.79 J | −33% |
 | vit_b_16 | CPU energy | 22.06 J | 15.88 J | 15.87 J | −28% |
 
-Transformers often benefit most because their dominant operations (large batched matrix multiplications in attention/MLP blocks) are typically well-matched to Tensor Core acceleration in fp16/bf16.
+Transformers often benefit most because their dominant operations (large batched matrix multiplications in attention/MLP blocks) are typically well-matched to Tensor Core acceleration in fp16/bf16.  
+However, reduced precision also helps some CNNs significantly (for example, ResNet50 and VGG16 show strong total-energy gains), so the practical rule is to tune precision per model rather than by architecture label alone.
 
 **Lightweight CNNs (MobileNet, YOLO, ShuffleNet)** — weak or even **reversed** gains:
 
@@ -265,6 +267,25 @@ Transformers often benefit most because their dominant operations (large batched
 | yolo | 12.23 J | 14.31 J | fp16 is *more* expensive |
 
 For small models with depthwise-separable-heavy workloads, the kernels can be memory/overhead-sensitive enough that reduced precision does not always help. In this regime, effects such as kernel selection, cast overhead, launch/runtime overhead, and memory behavior can outweigh theoretical fp16 speedups, leading to flat or even negative gains.
+
+#### 4.1.1 Precision Gains Across All Models (All Energy Channels)
+
+> Gain definition: `gain(%) = (fp32 - fpX) / fp32 × 100`.  
+> Positive values mean reduced energy vs fp32; negative values mean increased energy.
+
+| Model | Type | CPU fp16 gain | GPU fp16 gain | I/O fp16 gain | Total fp16 gain | CPU bf16 gain | GPU bf16 gain | I/O bf16 gain | Total bf16 gain |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| swin_t | Transformer | 32.44% | 51.17% | 33.99% | 45.57% | 32.85% | 51.84% | 34.23% | 46.11% |
+| vit_b_16 | Transformer | 28.02% | 37.50% | 26.29% | 34.52% | 28.05% | 37.91% | 29.86% | 35.56% |
+| resnet50 | CNN (classification) | 13.57% | 31.97% | 28.91% | 29.67% | 8.15% | 29.66% | 26.30% | 27.03% |
+| vgg16 | CNN (classification) | 26.27% | 29.12% | 28.35% | 28.74% | 25.43% | 29.64% | 27.65% | 28.86% |
+| resnet18 | CNN (classification) | 7.54% | 26.83% | 21.53% | 23.85% | -1.25% | 19.88% | 16.87% | 17.35% |
+| googlenet | CNN (classification) | -9.30% | 13.23% | 3.98% | 8.07% | -17.69% | 4.60% | -1.63% | 0.34% |
+| mobilenet_v3_large | CNN (classification, depthwise) | -17.18% | 9.52% | 0.17% | 3.29% | -22.04% | 0.83% | -3.96% | -3.48% |
+| yolo | Detector (CNN-like) | -16.98% | 1.39% | -8.32% | -4.23% | -22.99% | -4.71% | -13.49% | -10.03% |
+| ssdlite | Detector (CNN-like, depthwise) | -5.89% | -3.89% | -4.63% | -4.50% | -1.01% | 0.56% | 0.15% | 0.14% |
+| shufflenet_v2_x1_0 | CNN (classification, lightweight) | -18.35% | -2.45% | -8.86% | -6.87% | -25.70% | -11.06% | -15.71% | -14.73% |
+| mobilenet_v3_small | CNN (classification, depthwise) | -22.50% | -6.15% | -14.51% | -11.40% | -27.36% | -14.08% | -18.53% | -17.58% |
 
 ---
 
