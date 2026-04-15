@@ -306,12 +306,17 @@ def run_benchmark(cfg: dict, results_dir: ResultsDir) -> dict:
                         ),
                     })
 
+            attributed_j = sum(per_stage_j.values())
+            idle_j = max(total_j - attributed_j, 0.0)
+
             energy_summary = {
                 "total_j": round(total_j, 4),
                 "mean_power_w": round(mean_power_w, 4),
                 "per_rail_j": {r: round(e, 4) for r, e in per_rail_j.items()},
                 "per_stage_j": per_stage_j,
                 "per_stage_pct": per_stage_pct,
+                "idle_j": round(idle_j, 4),
+                "idle_pct": round(100.0 * idle_j / max(total_j, 1e-9), 2),
                 "energy_per_frame_j": round(total_j / max(n_timed, 1), 6),
                 "energy_per_inference_j": round(total_j / max(n_timed, 1), 6),
             }
@@ -461,8 +466,17 @@ def _print_summary(summary: dict, stage_energy_rows: list[dict]) -> None:
                     stage_totals.get(row["stage"], 0.0) + row["energy_j"]
                 )
             total_j = e.get("total_j", 1.0)
+            attributed_j = sum(stage_totals.values())
+            idle_j = max(total_j - attributed_j, 0.0)
+
             print("\n  Stage energy breakdown:")
             for stage, ej in sorted(stage_totals.items(), key=lambda x: -x[1]):
                 pct = 100.0 * ej / max(total_j, 1e-9)
-                print(f"    {stage:15s}: {ej:.4f} J  ({pct:.1f}%)")
+                print(f"    {stage:15s}: {ej:8.2f} J  ({pct:5.1f}%)")
+            # Always show idle/sleep so percentages visibly sum to 100%
+            idle_pct = 100.0 * idle_j / max(total_j, 1e-9)
+            print(f"    {'idle/sleep':15s}: {idle_j:8.2f} J  ({idle_pct:5.1f}%)  "
+                  f"← inter-frame sleep / unattributed")
+            print(f"    {'─'*15}   {'─'*8}    {'─'*5}")
+            print(f"    {'TOTAL':15s}: {total_j:8.2f} J  (100.0%)")
     print("=" * 62)
