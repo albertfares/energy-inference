@@ -361,12 +361,12 @@ def main() -> None:
             else:
                 fps = summary.get("fps", {})
                 en = summary.get("energy", {})
-                print(
-                    f"  OK  fps_mean={fps.get('mean', '?'):.1f}  "
-                    f"energy={en.get('total_j', '?'):.2f}J"
-                    if isinstance(fps.get("mean"), float)
-                    else f"  OK"
-                )
+                fps_mean = fps.get("mean")
+                total_j = en.get("total_j")
+                if isinstance(fps_mean, (int, float)) and isinstance(total_j, (int, float)):
+                    print(f"  OK  fps_mean={float(fps_mean):.1f}  energy={float(total_j):.2f}J")
+                else:
+                    print("  OK")
 
             # Cooldown (skip after last run)
             if global_run_idx < n_total:
