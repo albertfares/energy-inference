@@ -66,12 +66,39 @@ GRIDS: dict[str, dict[str, list]] = {
     },
 }
 
+# All pipeline stages that can appear across model backends.
+_ALL_STAGES = [
+    "capture", "preprocess", "infer", "infer_fused",
+    "postprocess", "filter", "annotate", "encode",
+]
+_ALL_RAILS = ["cpu", "gpu", "io"]
+
 SWEEP_SUMMARY_FIELDS = [
+    # --- identity ---
     "run_idx", "repeat", "model", "width", "height", "precision",
     "target_fps", "output_stream",
-    "fps_mean", "fps_p50", "fps_p95",
+    # --- run metadata ---
+    "duration_s", "n_timed",
+    # --- FPS ---
+    "fps_mean", "fps_p50", "fps_p95", "fps_min", "fps_max",
+    # --- total latency ---
     "latency_mean_ms", "latency_p50_ms", "latency_p95_ms",
-    "energy_total_j", "mean_power_w", "energy_per_frame_j",
+    "latency_min_ms", "latency_max_ms",
+    # --- per-stage latency (mean only — keeps CSV width sane) ---
+    *[f"{s}_lat_mean_ms" for s in _ALL_STAGES],
+    *[f"{s}_lat_p50_ms"  for s in _ALL_STAGES],
+    *[f"{s}_lat_p95_ms"  for s in _ALL_STAGES],
+    # --- top-level energy ---
+    "energy_total_j", "mean_power_w",
+    "energy_per_frame_j", "energy_per_inference_j",
+    # --- per-rail energy ---
+    *[f"{r}_rail_j" for r in _ALL_RAILS],
+    # --- per-stage energy ---
+    *[f"{s}_energy_j"   for s in _ALL_STAGES],
+    *[f"{s}_energy_pct" for s in _ALL_STAGES],
+    # --- idle ---
+    "idle_j", "idle_pct",
+    # --- sweep bookkeeping ---
     "status", "error", "run_dir",
 ]
 
@@ -245,30 +272,69 @@ def _extract_sweep_row(
     summary: dict,
 ) -> dict:
     fps = summary.get("fps", {})
-    lat = summary.get("latency_ms", {}).get("total", {})
+    lat_total = summary.get("latency_ms", {}).get("total", {})
+    lat_stage = summary.get("latency_ms", {}).get("per_stage", {})
     en = summary.get("energy", {})
-    return {
-        "run_idx": run_idx,
-        "repeat": repeat,
-        "model": cfg.get("model", ""),
-        "width": cfg.get("width", ""),
-        "height": cfg.get("height", ""),
-        "precision": cfg.get("precision", ""),
-        "target_fps": cfg.get("target_fps", ""),
+    per_stage_j   = en.get("per_stage_j", {})
+    per_stage_pct = en.get("per_stage_pct", {})
+    per_rail_j    = en.get("per_rail_j", {})
+
+    row: dict = {
+        # identity
+        "run_idx":       run_idx,
+        "repeat":        repeat,
+        "model":         cfg.get("model", ""),
+        "width":         cfg.get("width", ""),
+        "height":        cfg.get("height", ""),
+        "precision":     cfg.get("precision", ""),
+        "target_fps":    cfg.get("target_fps", ""),
         "output_stream": cfg.get("output_stream", ""),
+        # run metadata
+        "duration_s": summary.get("duration_s", ""),
+        "n_timed":    summary.get("n_timed", ""),
+        # FPS
         "fps_mean": fps.get("mean", ""),
-        "fps_p50": fps.get("p50", ""),
-        "fps_p95": fps.get("p95", ""),
-        "latency_mean_ms": lat.get("mean", ""),
-        "latency_p50_ms": lat.get("p50", ""),
-        "latency_p95_ms": lat.get("p95", ""),
-        "energy_total_j": en.get("total_j", ""),
-        "mean_power_w": en.get("mean_power_w", ""),
-        "energy_per_frame_j": en.get("energy_per_frame_j", ""),
-        "status": status,
-        "error": error,
+        "fps_p50":  fps.get("p50", ""),
+        "fps_p95":  fps.get("p95", ""),
+        "fps_min":  fps.get("min", ""),
+        "fps_max":  fps.get("max", ""),
+        # total latency
+        "latency_mean_ms": lat_total.get("mean", ""),
+        "latency_p50_ms":  lat_total.get("p50",  ""),
+        "latency_p95_ms":  lat_total.get("p95",  ""),
+        "latency_min_ms":  lat_total.get("min",  ""),
+        "latency_max_ms":  lat_total.get("max",  ""),
+        # top-level energy
+        "energy_total_j":        en.get("total_j", ""),
+        "mean_power_w":          en.get("mean_power_w", ""),
+        "energy_per_frame_j":    en.get("energy_per_frame_j", ""),
+        "energy_per_inference_j": en.get("energy_per_inference_j", ""),
+        # idle
+        "idle_j":   en.get("idle_j", ""),
+        "idle_pct": en.get("idle_pct", ""),
+        # sweep bookkeeping
+        "status":  status,
+        "error":   error,
         "run_dir": str(run_dir),
     }
+
+    # per-stage latency
+    for s in _ALL_STAGES:
+        s_lat = lat_stage.get(s, {})
+        row[f"{s}_lat_mean_ms"] = s_lat.get("mean", "")
+        row[f"{s}_lat_p50_ms"]  = s_lat.get("p50",  "")
+        row[f"{s}_lat_p95_ms"]  = s_lat.get("p95",  "")
+
+    # per-rail energy
+    for r in _ALL_RAILS:
+        row[f"{r}_rail_j"] = per_rail_j.get(r, "")
+
+    # per-stage energy
+    for s in _ALL_STAGES:
+        row[f"{s}_energy_j"]   = per_stage_j.get(s, "")
+        row[f"{s}_energy_pct"] = per_stage_pct.get(s, "")
+
+    return row
 
 
 def _append_sweep_csv(csv_path: Path, row: dict) -> None:
