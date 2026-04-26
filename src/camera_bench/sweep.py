@@ -349,6 +349,56 @@ def _append_sweep_csv(csv_path: Path, row: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight checks
+# ---------------------------------------------------------------------------
+
+def _preflight_sampler(sampler_exe: str, timeout_s: float = 3.0) -> None:
+    """
+    Run the INA3221 sampler for a few seconds and verify it produces output.
+    Aborts the sweep with a clear message if the sampler fails.
+    """
+    import subprocess as _sp
+    print(f"Pre-flight: testing INA3221 sampler ({sampler_exe}) ...", flush=True)
+    try:
+        proc = _sp.Popen(
+            [sampler_exe],
+            stdout=_sp.PIPE,
+            stderr=_sp.PIPE,
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_s)
+        except _sp.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+
+        # Success: sampler ran and wrote some CSV lines
+        output = stdout.decode(errors="replace") + stderr.decode(errors="replace")
+        lines = [l for l in stdout.decode(errors="replace").splitlines() if l.strip()]
+        if lines:
+            print(f"  OK — sampler produced {len(lines)} sample lines.")
+            return
+
+        # Sampler exited early (e.g. rc=-16 EBUSY)
+        print("\n" + "=" * 62)
+        print("ERROR: INA3221 sampler pre-flight failed.")
+        print("Output:", output.strip() or "(none)")
+        print()
+        print("Most likely cause: kernel ina3221 driver has re-bound the device.")
+        print("Fix:")
+        print("  echo '1-0040' | sudo tee /sys/bus/i2c/drivers/ina3221/unbind")
+        print("  # then retry the sweep")
+        print("=" * 62)
+        sys.exit(1)
+
+    except FileNotFoundError:
+        print("\n" + "=" * 62)
+        print(f"ERROR: sampler binary not found: {sampler_exe!r}")
+        print("Build it or pass --no-energy to skip power measurement.")
+        print("=" * 62)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -375,6 +425,10 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     sweep_csv = out_dir / "sweep_summary.csv"
     failures_csv = out_dir / "sweep_failures.csv"
+
+    # Pre-flight: verify the INA3221 sampler is reachable before burning hours
+    if args.enable_energy:
+        _preflight_sampler(args.sampler_exe)
 
     # Estimate total time
     run_s = args.duration_s + 30  # approx: bench + cleanup
