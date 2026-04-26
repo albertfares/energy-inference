@@ -392,12 +392,12 @@ def main() -> None:
             remain = n_total - global_run_idx
             eta_h = remain * (run_s + cooldown_s) / 3600
 
-            # Build run name
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Build run name — deterministic so --resume can find it by path.
+            # Timestamp is NOT part of the directory name; it lives in summary.json.
             run_name = (
                 f"{cfg.get('model','?')}_{cfg.get('width','?')}x{cfg.get('height','?')}"
                 f"_{cfg.get('precision','?')}_{cfg.get('output_stream','?')}"
-                f"_fps{cfg.get('target_fps',0)}_r{repeat}_{ts}"
+                f"_fps{cfg.get('target_fps',0)}_r{repeat}"
             )
             run_dir = out_dir / run_name
 
