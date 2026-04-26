@@ -352,36 +352,46 @@ def _append_sweep_csv(csv_path: Path, row: dict) -> None:
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
-def _preflight_sampler(sampler_exe: str, timeout_s: float = 3.0) -> None:
+def _preflight_sampler(sampler_exe: str) -> None:
     """
-    Run the INA3221 sampler for a few seconds and verify it produces output.
+    Run the INA3221 sampler for 2 seconds and verify it writes samples.
     Aborts the sweep with a clear message if the sampler fails.
     """
     import subprocess as _sp
+    import tempfile
+
     print(f"Pre-flight: testing INA3221 sampler ({sampler_exe}) ...", flush=True)
     try:
-        proc = _sp.Popen(
-            [sampler_exe],
-            stdout=_sp.PIPE,
-            stderr=_sp.PIPE,
-        )
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout_s)
-        except _sp.TimeoutExpired:
-            proc.kill()
-            stdout, stderr = proc.communicate()
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+            tmp_path = tmp.name
 
-        # Success: sampler ran and wrote some CSV lines
-        output = stdout.decode(errors="replace") + stderr.decode(errors="replace")
-        lines = [l for l in stdout.decode(errors="replace").splitlines() if l.strip()]
-        if lines:
-            print(f"  OK — sampler produced {len(lines)} sample lines.")
+        result = _sp.run(
+            [sampler_exe, "--duration-ms", "2000", "--out", tmp_path],
+            capture_output=True,
+            timeout=10,
+        )
+        stderr_out = result.stderr.decode(errors="replace").strip()
+
+        # Check the output CSV has data rows (beyond a possible header)
+        try:
+            with open(tmp_path) as f:
+                data_lines = [l for l in f if l.strip() and not l.startswith("#")]
+        except OSError:
+            data_lines = []
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        if data_lines:
+            print(f"  OK — sampler produced {len(data_lines)} samples in 2s.")
             return
 
-        # Sampler exited early (e.g. rc=-16 EBUSY)
+        # Sampler ran but wrote nothing (e.g. rc=-16 EBUSY)
         print("\n" + "=" * 62)
-        print("ERROR: INA3221 sampler pre-flight failed.")
-        print("Output:", output.strip() or "(none)")
+        print("ERROR: INA3221 sampler pre-flight failed — no samples written.")
+        print("Sampler output:", stderr_out or "(none)")
         print()
         print("Most likely cause: kernel ina3221 driver has re-bound the device.")
         print("Fix:")
@@ -394,6 +404,11 @@ def _preflight_sampler(sampler_exe: str, timeout_s: float = 3.0) -> None:
         print("\n" + "=" * 62)
         print(f"ERROR: sampler binary not found: {sampler_exe!r}")
         print("Build it or pass --no-energy to skip power measurement.")
+        print("=" * 62)
+        sys.exit(1)
+    except _sp.TimeoutExpired:
+        print("\n" + "=" * 62)
+        print("ERROR: INA3221 sampler timed out during pre-flight (>10s for 2s run).")
         print("=" * 62)
         sys.exit(1)
 
