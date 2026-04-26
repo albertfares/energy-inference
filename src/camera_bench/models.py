@@ -106,8 +106,10 @@ def _load_yolo(name: str, torch_device: torch.device, precision: str) -> dict:
 
     yolo = YOLO(f"{name}.pt")
     yolo.to("cpu" if torch_device.type == "cpu" else "cuda:0")
-    if precision == "fp16" and torch_device.type == "cuda":
-        yolo.model.half()
+    # Do NOT call yolo.model.half() here — Ultralytics fuses conv+bn during the
+    # first predict() call, and manually casting weights beforehand causes a dtype
+    # mismatch (c10::Half vs float) in fuse_conv_and_bn.  Instead we pass
+    # half=True to predict() so Ultralytics casts after fusion.
     return {
         "backend": "ultralytics",
         "name": name,

@@ -138,6 +138,7 @@ def _run_yolo_staged(
         imgsz=yolo_imgsz,
         device="cpu" if device.type == "cpu" else 0,
         verbose=False,
+        half=(detector.get("precision") == "fp16"),
     )
     _sync(device)
     t1 = time.monotonic_ns()
