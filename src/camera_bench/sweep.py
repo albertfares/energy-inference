@@ -75,7 +75,7 @@ _ALL_RAILS = ["cpu", "gpu", "io"]
 
 SWEEP_SUMMARY_FIELDS = [
     # --- identity ---
-    "run_idx", "repeat", "model", "width", "height", "precision",
+    "run_idx", "repeat", "model", "width", "height", "yolo_imgsz", "precision",
     "target_fps", "output_stream",
     # --- run metadata ---
     "duration_s", "n_timed",
@@ -200,6 +200,7 @@ def _build_cli_cmd(
         "--precision", cfg.get("precision", "fp32"),
         "--target-fps", str(cfg.get("target_fps", 0)),
         "--output-stream", cfg.get("output_stream", "none"),
+        "--yolo-imgsz", str(cfg.get("yolo_imgsz", 640)),
         "--duration-s", str(base_args.duration_s),
         "--warmup-frames", str(base_args.warmup_frames),
         "--fps", str(base_args.fps),
@@ -286,6 +287,7 @@ def _extract_sweep_row(
         "model":         cfg.get("model", ""),
         "width":         cfg.get("width", ""),
         "height":        cfg.get("height", ""),
+        "yolo_imgsz":    cfg.get("yolo_imgsz", 640),
         "precision":     cfg.get("precision", ""),
         "target_fps":    cfg.get("target_fps", ""),
         "output_stream": cfg.get("output_stream", ""),
@@ -465,6 +467,7 @@ def main() -> None:
             # Timestamp is NOT part of the directory name; it lives in summary.json.
             run_name = (
                 f"{cfg.get('model','?')}_{cfg.get('width','?')}x{cfg.get('height','?')}"
+                f"_imgsz{cfg.get('yolo_imgsz', 640)}"
                 f"_{cfg.get('precision','?')}_{cfg.get('output_stream','?')}"
                 f"_fps{cfg.get('target_fps',0)}_r{repeat}"
             )
