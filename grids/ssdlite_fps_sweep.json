@@ -1,0 +1,8 @@
+{
+  "model":        ["ssdlite320_mobilenet_v3_large"],
+  "width":        [640],
+  "height":       [480],
+  "precision":    ["fp32"],
+  "target_fps":   [0, 5, 10, 15, 20, 25, 30],
+  "output_stream":["none"]
+}
