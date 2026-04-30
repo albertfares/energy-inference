@@ -21,6 +21,26 @@ All 105 runs completed successfully with full energy attribution.
 
 ---
 
+## Pipeline Stage Definitions
+
+Each frame passes through a fixed sequence of stages. Every stage is timed independently using `time.monotonic_ns()` with `torch.cuda.synchronize()` before each timestamp to account for GPU async execution. The INA3221 power trace is then integrated over each stage's time window to attribute energy.
+
+| Stage | Hardware | What happens |
+|---|---|---|
+| **capture** | CPU + USB | `cap.read()` — V4L2 blocking wait for the next frame from the camera, USB bulk transfer, MJPEG decode (libjpeg-turbo), YUV→BGR colour conversion. At unbounded FPS this blocks ~14 ms waiting for the camera; at paced FPS the frame is already ready so it returns in <1 ms. |
+| **preprocess** | CPU → GPU | *(torchvision models only)* BGR→RGB conversion, `torch.from_numpy`, pixel normalisation to [0,1], `.to(device)` DMA transfer to GPU memory. |
+| **infer** | GPU | *(torchvision models only)* GPU forward pass through the detection network (conv layers, backbone, detection head). |
+| **infer_fused** | GPU | *(YOLO models only)* `model.predict()` fuses preprocess + infer + postprocess into a single timed call. The three stages cannot be separated without patching the Ultralytics internals. |
+| **postprocess** | GPU → CPU | *(torchvision models only)* Device-to-host tensor transfer, extraction of boxes/labels/scores from the model output dict. |
+| **filter** | CPU | Score threshold application and top-K clipping. Runs on CPU; energy contribution is typically <1%. |
+| **annotate** | CPU | *(only when output streaming is active)* Drawing bounding boxes and labels onto a copy of the frame using OpenCV. Zero energy when `output_stream=none`. |
+| **encode** | CPU / GPU | *(only when output streaming is active)* JPEG encode (MJPEG streamer) or H.264 encode (RTP streamers). Zero energy when `output_stream=none`. |
+| **idle / sleep** | All rails | Time not attributed to any stage — primarily `time.sleep()` during FPS pacing between frames. The Jetson draws ~11 W at idle, so this bucket dominates at low FPS targets. At unbounded FPS it is effectively zero. |
+
+**Note on energy attribution:** the INA3221 measures total SoC rail power and cannot distinguish which component is active within a stage. For example, the energy attributed to `capture` includes GPU idle draw during the camera wait — it is not the USB transfer energy alone. Similarly, `infer_fused` includes any CPU activity during GPU execution. All figures represent Jetson-side SoC energy; the USB camera's own power draw (~300–500 mW) is not captured.
+
+---
+
 ## 1. Energy per Frame vs Target FPS
 
 ![Energy per frame vs FPS](figures/energy_per_frame_vs_fps.png)
