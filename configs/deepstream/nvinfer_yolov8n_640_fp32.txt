@@ -1,0 +1,25 @@
+# nvinfer config — YOLOv8n  imgsz=640  FP32
+# Engine: models/trt/yolov8n_640_fp32.engine  (export via setup_deepstream.sh)
+#
+# net-scale-factor = 1/255 so nvinfer maps uint8 pixels → [0,1] float,
+# matching what Ultralytics does internally before TensorRT inference.
+# model-color-format=1 → RGB (YOLOv8 expects RGB, not BGR).
+# infer-dims = CHW of the engine's expected input.
+# output-tensor-meta=1 → raw tensor accessible from Python pad probes
+#   (no custom bbox parser needed for the energy benchmark).
+
+[property]
+gpu-id=0
+net-scale-factor=0.0039215697906911373
+model-color-format=1
+model-engine-file=../../models/trt/yolov8n_640_fp32.engine
+labelfile-path=coco_labels.txt
+batch-size=1
+network-mode=0
+num-detected-classes=80
+interval=0
+gie-unique-id=1
+network-type=0
+infer-dims=3;640;640
+output-blob-names=output0
+output-tensor-meta=1

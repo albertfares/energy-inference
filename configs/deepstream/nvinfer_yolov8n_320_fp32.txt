@@ -1,0 +1,16 @@
+# nvinfer config — YOLOv8n  imgsz=320  FP32
+[property]
+gpu-id=0
+net-scale-factor=0.0039215697906911373
+model-color-format=1
+model-engine-file=../../models/trt/yolov8n_320_fp32.engine
+labelfile-path=coco_labels.txt
+batch-size=1
+network-mode=0
+num-detected-classes=80
+interval=0
+gie-unique-id=1
+network-type=0
+infer-dims=3;320;320
+output-blob-names=output0
+output-tensor-meta=1

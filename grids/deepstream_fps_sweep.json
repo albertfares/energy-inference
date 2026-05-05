@@ -1,0 +1,14 @@
+{
+  "_comment": "DeepStream FPS sweep — mirrors the PyTorch yolov8n sweeps for direct comparison",
+  "model": "yolov8n",
+  "device": "/dev/video0",
+  "width": 640,
+  "height": 480,
+  "duration_s": 60,
+  "warmup_s": 5,
+  "imgsz": [640, 320],
+  "precision": ["fp32", "fp16"],
+  "target_fps": [0, 5, 10, 15, 20, 25, 30],
+  "repeats": 3,
+  "sampler_exe": "src/energy_inference/tools/sample_ina3221"
+}
