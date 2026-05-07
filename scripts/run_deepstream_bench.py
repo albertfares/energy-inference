@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import time
@@ -65,6 +66,64 @@ DEFAULT_SAMPLER = str(PROJECT_ROOT / "src" / "energy_inference" / "tools" / "sam
 DEFAULT_ENGINE_DIR = str(PROJECT_ROOT / "models" / "trt")
 DEFAULT_CONFIG_DIR = str(PROJECT_ROOT / "configs" / "deepstream")
 
+DEEPSTREAM_ROOT_DEFAULT = "/opt/nvidia/deepstream/deepstream-7.1"
+
+
+def _reexec_clean_gst_env(args: argparse.Namespace) -> None:
+    """
+    Re-exec this script with a sanitized environment so GStreamer/DeepStream uses
+    system libraries instead of conda-provided libgstreamer/libglib.
+
+    This avoids ABI mismatch issues when conda's libgstreamer is loaded while
+    system/DeepStream plugins are used.
+    """
+    if os.environ.get("ENERGY_INFERENCE_CLEAN_GST_ENV") == "1":
+        return
+
+    ds_root = Path(args.deepstream_root)
+    ds_lib = str(ds_root / "lib")
+    ds_plugins = str(ds_root / "lib" / "gst-plugins")
+
+    env: dict[str, str] = {}
+
+    # Minimal baseline so we don't inherit conda's LD_LIBRARY_PATH.
+    for k in ("HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TERM"):
+        if k in os.environ:
+            env[k] = os.environ[k]
+    env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+    # Prefer DeepStream + system libs.
+    env["LD_LIBRARY_PATH"] = ":".join(
+        p
+        for p in (
+            ds_lib,
+            "/usr/lib/aarch64-linux-gnu",
+            "/lib/aarch64-linux-gnu",
+        )
+        if p
+    )
+
+    # Keep DeepStream plugins AND system plugins (coreelements provides fakesink).
+    env["GST_PLUGIN_PATH"] = f"{ds_plugins}:/usr/lib/aarch64-linux-gnu/gstreamer-1.0"
+
+    # Avoid reusing a registry generated under conda libraries.
+    env["GST_REGISTRY"] = str(PROJECT_ROOT / ".gst_registry_clean.bin")
+
+    # Ensure GStreamer can run its external plugin scanner/loader.
+    scanner = "/usr/lib/aarch64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner"
+    if Path(scanner).exists():
+        env["GST_PLUGIN_SCANNER"] = scanner
+
+    # Avoid conda site-packages (gi overrides) when running under system python.
+    env["PYTHONNOUSERSITE"] = "1"
+    env.pop("PYTHONPATH", None)
+
+    env["ENERGY_INFERENCE_CLEAN_GST_ENV"] = "1"
+
+    # Use system Python to avoid conda GI/GStreamer bindings entirely.
+    py = "/usr/bin/python3"
+    os.execve(py, [py, *sys.argv], env)
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="DeepStream benchmark — single run")
@@ -83,6 +142,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--sampler-exe", default=DEFAULT_SAMPLER)
     p.add_argument("--engine-dir", default=DEFAULT_ENGINE_DIR)
     p.add_argument("--config-dir", default=DEFAULT_CONFIG_DIR)
+    p.add_argument(
+        "--clean-gst-env",
+        action="store_true",
+        help="Re-exec with sanitized env to avoid conda GStreamer ABI mismatches",
+    )
+    p.add_argument(
+        "--deepstream-root",
+        default=DEEPSTREAM_ROOT_DEFAULT,
+        help="DeepStream install root (used by --clean-gst-env)",
+    )
     p.add_argument("--out-dir", default=None,
                    help="Override output directory")
     p.add_argument("--no-energy", action="store_true",
@@ -92,6 +161,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.clean_gst_env:
+        _reexec_clean_gst_env(args)
 
     # ── Resolve paths ─────────────────────────────────────────────────────────
     engine_name = f"{args.model}_{args.imgsz}_{args.precision}.engine"

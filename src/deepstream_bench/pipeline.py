@@ -104,7 +104,10 @@ def _build_pipeline_str(
     # No framerate in the initial caps: avoids not-negotiated errors when the
     # camera reports a fractional rate (e.g. 30000/1001) instead of 30/1.
     src_parts = [
-        f"v4l2src device={device}",
+        # Force MMAP I/O mode.
+        # Some systems auto-select DMABUF (io-mode=4), which can cause downstream
+        # elements (e.g., jpegdec) to fail when buffers arrive as DMABUF memory.
+        f"v4l2src device={device} io-mode=2",
         f"image/jpeg,width={width},height={height}",
     ]
 
@@ -119,16 +122,25 @@ def _build_pipeline_str(
         # nvjpegdec may output YUV 4:2:0 variants other than NV12;
         # nvvideoconvert normalises to NV12 in NVMM memory.
         src_parts += [
+            # Buffering between capture/decode and the rest of the DeepStream
+            # pipeline. `leaky=downstream` prevents backpressure from
+            # propagating to v4l2src (which can otherwise stop with -5).
+            "queue max-size-buffers=4 leaky=downstream",
             "nvjpegdec",
+            "queue max-size-buffers=4 leaky=downstream",
             "nvvideoconvert",
             f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
+            "queue max-size-buffers=4 leaky=downstream",
         ]
     else:
         # Software decode → CPU memory → copy to NVMM via nvvideoconvert
         src_parts += [
+            "queue max-size-buffers=4 leaky=downstream",
             "jpegdec",
+            "queue max-size-buffers=4 leaky=downstream",
             "nvvideoconvert",
             f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
+            "queue max-size-buffers=4 leaky=downstream",
         ]
 
     src_parts.append("mux.sink_0")
@@ -206,6 +218,8 @@ def run_deepstream_benchmark(
     collector = _FrameCollector()
     loop = GLib.MainLoop()
     pipeline: Optional[Gst.Pipeline] = None
+    bus_error: dict[str, str] = {}
+    saw_eos = False
 
     # ── Pad probe: count every frame that exits nvinfer ──────────────────────
     def _on_sink_pad_probe(pad, info, _user_data):
@@ -216,12 +230,18 @@ def run_deepstream_benchmark(
 
     # ── Bus message handler ───────────────────────────────────────────────────
     def _on_bus_message(bus, message):
+        nonlocal saw_eos, bus_error
         t = message.type
         if t == Gst.MessageType.EOS:
+            saw_eos = True
             loop.quit()
         elif t == Gst.MessageType.ERROR:
             err, dbg = message.parse_error()
             print(f"GStreamer ERROR: {err.message}\n  debug: {dbg}", file=sys.stderr)
+            bus_error = {
+                "message": err.message or "GStreamer error",
+                "debug": dbg or "",
+            }
             loop.quit()
         return True
 
@@ -306,6 +326,18 @@ def run_deepstream_benchmark(
     else:
         fps_p50 = fps_p95 = fps_min = fps_max = fps_mean
 
+    status = "ok"
+    error_msg = ""
+    if bus_error:
+        status = "failed"
+        error_msg = bus_error.get("message", "GStreamer error")
+    elif saw_eos and collector.count() == n_frames_at_start:
+        # EOS without producing any new frames in the timed window almost
+        # always indicates the source stopped streaming (e.g., V4L2 I/O error
+        # or caps negotiation failure).
+        status = "failed"
+        error_msg = "EOS received before any frames were processed"
+
     summary = {
         "n_frames": n_frames,
         "actual_duration_s": round(actual_duration_s, 3),
@@ -314,8 +346,8 @@ def run_deepstream_benchmark(
         "fps_p95": round(fps_p95, 4),
         "fps_min": round(fps_min, 4),
         "fps_max": round(fps_max, 4),
-        "status": "ok",
-        "error": "",
+        "status": status,
+        "error": error_msg,
     }
 
     # ── Compute energy ────────────────────────────────────────────────────────

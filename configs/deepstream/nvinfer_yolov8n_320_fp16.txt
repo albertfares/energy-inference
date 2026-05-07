@@ -10,7 +10,8 @@ network-mode=2
 num-detected-classes=80
 interval=0
 gie-unique-id=1
-network-type=0
+# NOTE: Benchmark throughput only; classifier mode skips detector bbox parsing.
+network-type=1
 infer-dims=3;320;320
 output-blob-names=output0
 output-tensor-meta=1

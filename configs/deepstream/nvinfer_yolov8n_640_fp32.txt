@@ -19,7 +19,10 @@ network-mode=0
 num-detected-classes=80
 interval=0
 gie-unique-id=1
-network-type=0
+# NOTE: We benchmark inference throughput only (no object metadata needed).
+# Using classifier mode avoids DeepStream's default detector bbox parser, which
+# expects "coverage"/"bbox" outputs and crashes on YOLOv8's single `output0`.
+network-type=1
 infer-dims=3;640;640
 output-blob-names=output0
 output-tensor-meta=1
