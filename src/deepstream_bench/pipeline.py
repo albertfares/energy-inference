@@ -58,16 +58,16 @@ def _require_gst() -> None:
 
 
 def _hw_jpeg_dec_available() -> bool:
-    """Return True if the nvjpegdec *element* is available in the GStreamer registry.
+    """Return True if nvjpegdec hardware decode is usable on this system.
 
-    We check for the element factory directly rather than the plugin name —
-    some Jetson/DeepStream builds register a plugin named "nvjpeg" that does
-    not actually expose a usable nvjpegdec element factory.
+    nvjpegdec is registered as a GStreamer element on JetPack 6 but the
+    underlying NvMMLite JPEG block (type 277) raises a stream error when
+    real MJPEG camera frames arrive, causing immediate EOS.  Until NVIDIA
+    resolves this for live V4L2 MJPEG sources, we always return False and
+    rely on the software jpegdec fallback.  The TensorRT inference stage
+    (nvinfer) is unaffected — it remains the key comparison vs PyTorch.
     """
-    try:
-        return Gst.ElementFactory.find("nvjpegdec") is not None
-    except Exception:
-        return False
+    return False
 
 
 def _build_pipeline_str(
