@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,31 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from deepstream_bench.pipeline import run_deepstream_benchmark
+
+
+def make_patched_config(template_path: Path, engine_path: Path) -> str:
+    """
+    Return a temp nvinfer config path with model-engine-file set to the
+    absolute engine path.  nvinfer resolves relative paths from the process
+    CWD, which can differ from the config file's directory — using an
+    absolute path avoids the mismatch entirely.
+    """
+    text = template_path.read_text()
+    lines = []
+    for line in text.splitlines():
+        if line.strip().startswith("model-engine-file"):
+            lines.append(f"model-engine-file={engine_path.resolve()}")
+        else:
+            lines.append(line)
+    patched = "\n".join(lines) + "\n"
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, prefix="nvinfer_patched_"
+    )
+    tmp.write(patched)
+    tmp.flush()
+    tmp.close()
+    return tmp.name
 
 DEFAULT_SAMPLER = str(PROJECT_ROOT / "src" / "energy_inference" / "tools" / "sample_ina3221")
 DEFAULT_ENGINE_DIR = str(PROJECT_ROOT / "models" / "trt")
@@ -74,6 +100,11 @@ def main() -> None:
         print(f"ERROR: nvinfer config not found: {config_path}", file=sys.stderr)
         sys.exit(1)
 
+    # Patch the config so model-engine-file is an absolute path.
+    # nvinfer resolves relative paths from the process CWD, not the config
+    # file's directory — this avoids the mismatch.
+    patched_config = make_patched_config(config_path, engine_path)
+
     # ── Output directory ──────────────────────────────────────────────────────
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.out_dir:
@@ -110,7 +141,7 @@ def main() -> None:
         width=args.width,
         height=args.height,
         target_fps=args.target_fps,
-        nvinfer_config=str(config_path),
+        nvinfer_config=patched_config,
         warmup_s=args.warmup,
         duration_s=args.duration,
         sampler_exe=sampler,
@@ -137,10 +168,16 @@ def main() -> None:
     print(f"\nSummary written → {summary_path}")
 
     # Print key results
+    def _fmt(val, fmt, fallback="?"):
+        try:
+            return format(val, fmt)
+        except (TypeError, ValueError):
+            return fallback
+
     print("\n── Results ─────────────────────────────────────")
     print(f"  Frames      : {summary.get('n_frames', '?')}")
-    print(f"  Actual FPS  : {summary.get('fps_mean', '?'):.2f}")
-    print(f"  Duration    : {summary.get('actual_duration_s', '?'):.1f}s")
+    print(f"  Actual FPS  : {_fmt(summary.get('fps_mean'), '.2f')}")
+    print(f"  Duration    : {_fmt(summary.get('actual_duration_s'), '.1f')}s")
     if summary.get("energy_total_j") is not None:
         print(f"  Energy      : {summary['energy_total_j']:.2f} J")
         print(f"  Mean power  : {summary['mean_power_w']:.3f} W")
