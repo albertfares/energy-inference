@@ -32,16 +32,23 @@ from deepstream_bench.pipeline import run_deepstream_benchmark
 
 def make_patched_config(template_path: Path, engine_path: Path) -> str:
     """
-    Return a temp nvinfer config path with model-engine-file set to the
-    absolute engine path.  nvinfer resolves relative paths from the process
-    CWD, which can differ from the config file's directory — using an
-    absolute path avoids the mismatch entirely.
+    Return a temp nvinfer config path with model-engine-file and labelfile-path
+    set to absolute paths.  nvinfer resolves relative paths from the process
+    CWD, which can differ from the config file's directory — using absolute
+    paths avoids the mismatch entirely.
     """
+    config_dir = template_path.resolve().parent
     text = template_path.read_text()
     lines = []
     for line in text.splitlines():
-        if line.strip().startswith("model-engine-file"):
+        stripped = line.strip()
+        if stripped.startswith("model-engine-file"):
             lines.append(f"model-engine-file={engine_path.resolve()}")
+        elif stripped.startswith("labelfile-path"):
+            # Resolve relative label path relative to the config file's dir
+            rel = stripped.split("=", 1)[1].strip()
+            abs_label = (config_dir / rel).resolve()
+            lines.append(f"labelfile-path={abs_label}")
         else:
             lines.append(line)
     patched = "\n".join(lines) + "\n"
