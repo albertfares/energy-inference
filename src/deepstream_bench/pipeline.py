@@ -58,10 +58,14 @@ def _require_gst() -> None:
 
 
 def _hw_jpeg_dec_available() -> bool:
-    """Return True if nvjpegdec is available in the GStreamer registry."""
+    """Return True if the nvjpegdec *element* is available in the GStreamer registry.
+
+    We check for the element factory directly rather than the plugin name —
+    some Jetson/DeepStream builds register a plugin named "nvjpeg" that does
+    not actually expose a usable nvjpegdec element factory.
+    """
     try:
-        reg = Gst.Registry.get()
-        return reg.find_plugin("nvjpeg") is not None or reg.find_plugin("nvjpegdec") is not None
+        return Gst.ElementFactory.find("nvjpegdec") is not None
     except Exception:
         return False
 
@@ -81,18 +85,27 @@ def _build_pipeline_str(
 
     Decode path selection:
       HW (preferred): nvjpegdec — hardware JPEG decoder (NVDEC), NVMM output.
-      SW (fallback):  jpegdec + videoconvert + nvvideoconvert — software decode
-                      then copy to NVMM.  Used when nvjpegdec is unavailable.
+                      nvvideoconvert follows to guarantee NV12 format.
+      SW (fallback):  jpegdec + nvvideoconvert — software decode then copy to
+                      NVMM.  Used when nvjpegdec is unavailable.
                       The TensorRT inference benefit is identical; only the
                       capture/decode stage reverts to CPU.
+
+    Caps strategy:
+      - v4l2src → only width/height (no framerate) to avoid negotiation
+        failures on cameras that report 30000/1001 instead of 30/1.
+      - videorate (when target_fps is set) enforces the desired rate after
+        capture, so the source caps remain flexible.
     """
     use_hw_dec = _hw_jpeg_dec_available()
     print(f"JPEG decode: {'nvjpegdec (NVDEC hardware)' if use_hw_dec else 'jpegdec (software fallback)'}")
 
     # Upstream chain (camera → decode → NVMM → mux)
+    # No framerate in the initial caps: avoids not-negotiated errors when the
+    # camera reports a fractional rate (e.g. 30000/1001) instead of 30/1.
     src_parts = [
         f"v4l2src device={device}",
-        f"image/jpeg,width={width},height={height},framerate=30/1",
+        f"image/jpeg,width={width},height={height}",
     ]
 
     if 0 < target_fps < 30:
@@ -103,15 +116,17 @@ def _build_pipeline_str(
         ]
 
     if use_hw_dec:
+        # nvjpegdec may output YUV 4:2:0 variants other than NV12;
+        # nvvideoconvert normalises to NV12 in NVMM memory.
         src_parts += [
             "nvjpegdec",
+            "nvvideoconvert",
             f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
         ]
     else:
         # Software decode → CPU memory → copy to NVMM via nvvideoconvert
         src_parts += [
             "jpegdec",
-            f"video/x-raw,format=I420,width={width},height={height}",
             "nvvideoconvert",
             f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
         ]
