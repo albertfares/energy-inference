@@ -57,6 +57,15 @@ def _require_gst() -> None:
         )
 
 
+def _hw_jpeg_dec_available() -> bool:
+    """Return True if nvjpegdec is available in the GStreamer registry."""
+    try:
+        reg = Gst.Registry.get()
+        return reg.find_plugin("nvjpeg") is not None or reg.find_plugin("nvjpegdec") is not None
+    except Exception:
+        return False
+
+
 def _build_pipeline_str(
     device: str,
     width: int,
@@ -69,8 +78,18 @@ def _build_pipeline_str(
 
     The nvstreammux sink pad is connected last so parse_launch can find
     the named element before wiring the upstream chain to mux.sink_0.
+
+    Decode path selection:
+      HW (preferred): nvjpegdec — hardware JPEG decoder (NVDEC), NVMM output.
+      SW (fallback):  jpegdec + videoconvert + nvvideoconvert — software decode
+                      then copy to NVMM.  Used when nvjpegdec is unavailable.
+                      The TensorRT inference benefit is identical; only the
+                      capture/decode stage reverts to CPU.
     """
-    # Upstream chain (camera → NVDEC → NVMM → mux)
+    use_hw_dec = _hw_jpeg_dec_available()
+    print(f"JPEG decode: {'nvjpegdec (NVDEC hardware)' if use_hw_dec else 'jpegdec (software fallback)'}")
+
+    # Upstream chain (camera → decode → NVMM → mux)
     src_parts = [
         f"v4l2src device={device}",
         f"image/jpeg,width={width},height={height},framerate=30/1",
@@ -83,11 +102,21 @@ def _build_pipeline_str(
             f"image/jpeg,framerate={target_fps}/1",
         ]
 
-    src_parts += [
-        "nvjpegdec",
-        f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
-        "mux.sink_0",
-    ]
+    if use_hw_dec:
+        src_parts += [
+            "nvjpegdec",
+            f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
+        ]
+    else:
+        # Software decode → CPU memory → copy to NVMM via nvvideoconvert
+        src_parts += [
+            "jpegdec",
+            f"video/x-raw,format=I420,width={width},height={height}",
+            "nvvideoconvert",
+            f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
+        ]
+
+    src_parts.append("mux.sink_0")
     src_chain = " ! ".join(src_parts)
 
     # Main chain (mux → nvinfer → fakesink)
