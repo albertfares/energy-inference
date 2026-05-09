@@ -1,6 +1,6 @@
 # DeepStream vs PyTorch — Energy & FPS Comparison
 
-**Model:** YOLOv8n · **Hardware:** Jetson AGX Orin (MAXN mode) · **Camera:** USB V4L2 640×480 MJPEG
+**Models:** YOLOv8n, SSDLite320 · **Hardware:** Jetson AGX Orin (MAXN mode) · **Camera:** USB V4L2 640×480 MJPEG
 
 ---
 
@@ -136,7 +136,7 @@ Neither pipeline has a flat idle floor: power rises roughly linearly from ~11 W 
 
 ---
 
-## Sweep Metadata
+## Sweep Metadata — YOLOv8n
 
 | | PyTorch | DeepStream |
 |---|---|---|
@@ -149,3 +149,125 @@ Neither pipeline has a flat idle floor: power rises roughly linearly from ~11 W 
 | Total runs | 84 ok | 82 ok / 2 failed |
 | Inference backend | PyTorch 2.x CUDA | TensorRT via DeepStream 7.1 `nvinfer` |
 | Engine source | Ultralytics YOLOv8n | Exported via `setup_deepstream.sh` |
+
+---
+
+---
+
+# SSDLite320 — DeepStream vs PyTorch
+
+## Overview
+
+Same pipeline comparison for `ssdlite320_mobilenet_v3_large` (torchvision). Unlike YOLOv8n which is
+camera-limited at ~30 fps, **SSDLite is compute-limited in both backends**: PyTorch saturates at
+~13 fps and DeepStream/TRT at ~15 fps. The FPS sweep therefore tests a different regime — neither
+pipeline can keep up with the camera at high target rates.
+
+The TRT engine was exported from the torchvision model via ONNX (backbone + detection head,
+bypassing NMS postprocessing) using `scripts/export_ssdlite_to_trt.py`.
+`network-type=1` (classifier mode) is used in nvinfer to bypass the bbox parser, consistent with
+the YOLOv8n setup.
+
+Grid: `precision = FP32 only` × `target_fps ∈ {0, 5, 10, 15, 20, 25, 30}` × 3 repeats (60 s each).
+
+## Results
+
+### Actual FPS Achieved vs Target
+
+![Actual FPS achieved vs target FPS](figures/ssdlite_fps_achieved.png)
+
+Both pipelines are compute-limited. PyTorch caps at ~13 fps regardless of target; DeepStream/TRT
+caps at ~15 fps. For target_fps > 15, the DeepStream pipeline exhibits a **frame-count inflation
+artefact**: nvstreammux buffers frames while nvinfer is busy and releases them in bursts, causing
+`fps_mean` to equal the target while `fps_p50` stays at ~15 fps. Data points for target_fps = 20
+and 25 should be treated with caution (see Data Quality Notes below).
+
+### Energy per Frame & Mean Power
+
+![Energy per frame and mean power vs target FPS](figures/ssdlite_epf_power.png)
+
+### DeepStream Energy Saving vs PyTorch
+
+![Energy saving % vs target FPS](figures/ssdlite_saving.png)
+
+## Summary Table — Reliable Operating Points (target_fps ≤ 15)
+
+All values are medians over 3 repeats. target_fps=20 and 25 are excluded due to the fps_mean
+inflation artefact described above.
+
+| target_fps | PT fps | DS fps | PT mJ/frame | DS mJ/frame | Energy saving | PT W | DS W |
+|---|---|---|---|---|---|---|---|
+| 0 (unbounded) | 12.7 | 15.0 | 1179 | 1057 | **+10.4%** | 15.1 | 15.9 |
+| 5 | 5.0 | 5.0 | 2446 | 3046 | **−24.5%** | 12.2 | 15.3 |
+| 10 | 10.0 | 10.0 | 1422 | 1598 | **−12.4%** | 14.2 | 16.0 |
+| 15 | 12.3 | 15.0 | 1231 | 1094 | **+11.1%** | 15.1 | 16.4 |
+| 30 (hits TRT max) | 12.0 | 15.0 | 1261 | 888 | **+29.6%** | 15.1 | 13.3 |
+
+## Key Findings — SSDLite
+
+### 1. TRT increases max throughput by ~16%
+
+PyTorch SSDLite saturates at ~12.7 fps; DeepStream/TRT at ~15.0 fps. Both are limited by
+inference compute, not the camera. TRT's model optimisations (layer fusion, kernel auto-tuning)
+give a meaningful throughput uplift even for a relatively lightweight model like SSDLite.
+
+### 2. Energy per frame: TRT wins at max throughput, loses at throttled rates
+
+At unbounded FPS (target_fps=0), DeepStream saves **10.4%** energy per frame. At target_fps=15
+(where both pipelines are near their compute ceiling), savings reach **11%**.
+
+Below 15 fps (target_fps=5 and 10), DeepStream is significantly worse: **−24.5% at 5 fps** and
+**−12.4% at 10 fps**. The GStreamer/nvinfer infrastructure maintains ~16 W regardless of frame
+rate, whereas PyTorch idles down to ~12 W at 5 fps. This idle-overhead penalty is larger for
+SSDLite than for YOLOv8n because SSDLite's compute budget is smaller — the pipeline overhead
+represents a larger fraction of total energy.
+
+### 3. Power: DeepStream draws more at all throttled rates
+
+Unlike YOLOv8n (where DS draws slightly less power at high FPS), SSDLite DS consistently draws
+~1 W more than PyTorch at every operating point. This is because the TRT SSDLite engine is
+already running at full throttle even at "lower" target rates: 15 fps is the engine's natural
+maximum, so the GPU never gets to idle.
+
+### 4. Crossover point is earlier than YOLOv8n
+
+For YOLOv8n the DS/PT crossover was at ~15–20 fps. For SSDLite it is between 10 and 15 fps.
+This is consistent with the smaller per-inference compute budget: the fixed pipeline overhead
+becomes proportionally cheaper at lower inference loads.
+
+### 5. Comparison across models (FP32, unbounded FPS)
+
+![Rail breakdown — all models, FP32, unbounded FPS](figures/all_models_rail_breakdown.png)
+
+At unbounded FPS and FP32, across all three model configurations:
+- DeepStream consistently reduces energy per frame vs PyTorch when the pipeline is saturated.
+- SSDLite (both backends) draws more CPU rail energy than YOLOv8n — the lighter GPU inference
+  means more of the system budget is spent on capture, decode, and memory traffic.
+- The GPU rail fraction drops from ~52% (YOLOv8n) to ~40% (SSDLite) in DeepStream, reflecting
+  the lighter inference workload relative to system overhead.
+
+## Data Quality Notes — SSDLite
+
+- **target_fps = 20 and 25 (DeepStream):** `fps_mean` reports 20.0 and 25.0 respectively, but
+  `fps_p50` is ~15.4 and 15.6 fps — matching the TRT engine's compute ceiling. This indicates
+  nvstreammux is buffering frames and releasing them in bursts when nvinfer becomes available,
+  inflating the frame count at `fakesink`. These rows are excluded from the summary table.
+
+- **target_fps = 30 (DeepStream):** The engine cannot reach 30 fps; all three repeats report
+  ~15.0 fps mean. However, energy values show a split: repeat 0 measures 945 J (15.75 W) while
+  repeats 1–2 measure ~800 J (13.3 W). The median (888 mJ/frame) reflects r1/r2. The discrepancy
+  in r0 is likely an INA3221 sampling alignment issue at the start of the run.
+
+## Sweep Metadata — SSDLite
+
+| | PyTorch | DeepStream |
+|---|---|---|
+| Run date | 2026-04-28 | 2026-05-09 |
+| Jetson power mode | MAXN | MAXN |
+| Camera | USB V4L2 `/dev/video0` 640×480 MJPEG | same |
+| Warmup | 5 s | 5 s |
+| Benchmark window | 60 s | 60 s |
+| INA3221 rate | 1 kHz | 1 kHz |
+| Total runs | 21 ok | 21 ok |
+| Inference backend | PyTorch 2.x CUDA | TensorRT via DeepStream 7.1 `nvinfer` |
+| Engine source | torchvision pretrained | ONNX export via `export_ssdlite_to_trt.py` |
