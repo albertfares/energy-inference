@@ -1,0 +1,31 @@
+# nvinfer config — ssdlite320_mobilenet_v3_large  imgsz=320  FP32
+# Engine: models/trt/ssdlite320_320_fp32.engine
+#         (build with: python3 scripts/export_ssdlite_to_trt.py)
+#
+# net-scale-factor = 1/255 → nvinfer maps uint8 pixels to [0, 1] float,
+# matching the normalisation expected by the exported backbone wrapper.
+# model-color-format=1 → RGB.
+# infer-dims = CHW of the engine's input (320×320, same as the model).
+#
+# network-type=1 (classifier) bypasses DeepStream's bbox parser.
+# We benchmark inference throughput and energy only — detection output
+# is discarded, exactly as for the YOLOv8n configs.
+
+[property]
+gpu-id=0
+net-scale-factor=0.0039215697906911373
+model-color-format=1
+model-engine-file=../../models/trt/ssdlite320_320_fp32.engine
+labelfile-path=coco_labels.txt
+batch-size=1
+network-mode=0
+num-detected-classes=91
+interval=0
+gie-unique-id=1
+# NOTE: network-type=1 (classifier) bypasses the bbox parser.
+# SSDLite outputs (cls_logits, bbox_regression) are incompatible with
+# DeepStream's built-in detector parser; classifier mode avoids the crash.
+network-type=1
+infer-dims=3;320;320
+output-blob-names=cls_logits
+output-tensor-meta=1
