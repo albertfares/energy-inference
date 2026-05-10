@@ -130,6 +130,13 @@ def run_single(cfg: dict, run_dir: Path) -> dict:
         "--height",     str(cfg["height"]),
         "--sampler-exe", str(PROJECT_ROOT / cfg["sampler_exe"]),
         "--out-dir",    str(run_dir),
+        # Always re-exec the per-run process under system Python with the
+        # DeepStream plugin path. This is a no-op when already in a clean env
+        # (guarded by ENERGY_INFERENCE_CLEAN_GST_ENV inside the bench script)
+        # but is REQUIRED whenever the sweep is launched from a conda env,
+        # whose GStreamer ABI is incompatible with DeepStream's prebuilt
+        # plugins (nvstreammux, nvinfer, nvvideoconvert, ...).
+        "--clean-gst-env",
     ]
 
     print(f"  CMD: {' '.join(cmd)}")

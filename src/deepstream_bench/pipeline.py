@@ -260,7 +260,15 @@ def run_deepstream_benchmark(
     try:
         pipeline = Gst.parse_launch(pipeline_str)
     except Exception as exc:
-        return {"status": "failed", "error": f"Pipeline build failed: {exc}"}
+        msg = f"Pipeline build failed: {exc}"
+        if "nvstreammux" in str(exc) or "no element" in str(exc):
+            msg += (
+                "\n  Hint: DeepStream GStreamer plugins not visible to the active "
+                "GStreamer.\n  This usually means a conda-provided GStreamer is "
+                "shadowing the system one.\n  Re-run with `--clean-gst-env` to "
+                "re-exec under system Python with the DeepStream plugin path."
+            )
+        return {"status": "failed", "error": msg}
 
     # Attach pad probe on fakesink's sink pad
     sink = pipeline.get_by_name("sink")

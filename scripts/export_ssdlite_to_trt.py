@@ -24,6 +24,7 @@ Output:
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -37,7 +38,27 @@ ENGINE_DIR.mkdir(parents=True, exist_ok=True)
 
 ONNX_PATH   = ENGINE_DIR / "ssdlite320_320_fp32.onnx"
 ENGINE_PATH = ENGINE_DIR / "ssdlite320_320_fp32.engine"
-OPSET       = 11
+# Opset 17 is supported by both modern torch.onnx and TensorRT 10.x; older opsets
+# (e.g. 11) trigger an onnxscript downconversion failure and the file is kept at
+# whatever opset torch picked anyway.
+OPSET       = 17
+
+# JetPack ships trtexec under /usr/src/tensorrt/bin but does not put it on PATH.
+TRTEXEC_CANDIDATES = (
+    "trtexec",
+    "/usr/src/tensorrt/bin/trtexec",
+    "/usr/local/tensorrt/bin/trtexec",
+)
+
+
+def _find_trtexec() -> str:
+    for cand in TRTEXEC_CANDIDATES:
+        resolved = shutil.which(cand) if "/" not in cand else (cand if Path(cand).is_file() else None)
+        if resolved:
+            return resolved
+    raise FileNotFoundError(
+        "trtexec not found. Tried: " + ", ".join(TRTEXEC_CANDIDATES)
+    )
 
 
 class _SSDLiteForTRT(nn.Module):
@@ -132,14 +153,16 @@ def build_engine() -> None:
         print(f"Engine already exists: {ENGINE_PATH} — skipping trtexec")
         return
 
-    trtexec = "trtexec"  # must be on PATH on Jetson (JetPack ships it)
+    trtexec = _find_trtexec()
 
+    # TensorRT 10 dropped the legacy --workspace and --fp32 flags:
+    #   * workspace is now controlled via --memPoolSize=workspace:<size>
+    #   * fp32 is the default precision (fp16/int8 are opt-in)
     cmd = [
         trtexec,
         f"--onnx={ONNX_PATH}",
         f"--saveEngine={ENGINE_PATH}",
-        "--workspace=4096",   # MB
-        "--fp32",
+        "--memPoolSize=workspace:4096MiB",
         "--verbose",
     ]
     print(f"\nRunning trtexec …")
@@ -179,4 +202,5 @@ if __name__ == "__main__":
     print("\nDone. Next step:")
     print(f"  python3 scripts/run_deepstream_bench.py \\")
     print(f"      --model ssdlite320 --imgsz 320 --precision fp32 \\")
-    print(f"      --target-fps 0 --duration 10 --no-energy")
+    print(f"      --target-fps 0 --duration 10 --no-energy \\")
+    print(f"      --clean-gst-env  # required when running from a conda env")
