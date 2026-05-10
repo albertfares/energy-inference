@@ -122,25 +122,34 @@ def _build_pipeline_str(
         # nvjpegdec may output YUV 4:2:0 variants other than NV12;
         # nvvideoconvert normalises to NV12 in NVMM memory.
         src_parts += [
-            # Buffering between capture/decode and the rest of the DeepStream
-            # pipeline. `leaky=downstream` prevents backpressure from
+            # Early queues: leaky=downstream prevents backpressure from
             # propagating to v4l2src (which can otherwise stop with -5).
             "queue max-size-buffers=4 leaky=downstream",
             "nvjpegdec",
             "queue max-size-buffers=4 leaky=downstream",
             "nvvideoconvert",
             f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
-            "queue max-size-buffers=4 leaky=downstream",
+            # Final queue before mux: leaky=upstream drops NEW frames when
+            # nvinfer is busy, so no backlog accumulates. This ensures
+            # fps_mean honestly reflects the model's compute throughput
+            # rather than being inflated by burst releases from a backlog.
+            "queue max-size-buffers=1 leaky=upstream",
         ]
     else:
         # Software decode → CPU memory → copy to NVMM via nvvideoconvert
         src_parts += [
+            # Early queues: leaky=downstream prevents backpressure from
+            # propagating to v4l2src (which can otherwise stop with -5).
             "queue max-size-buffers=4 leaky=downstream",
             "jpegdec",
             "queue max-size-buffers=4 leaky=downstream",
             "nvvideoconvert",
             f"video/x-raw(memory:NVMM),format=NV12,width={width},height={height}",
-            "queue max-size-buffers=4 leaky=downstream",
+            # Final queue before mux: leaky=upstream drops NEW frames when
+            # nvinfer is busy, so no backlog accumulates. This ensures
+            # fps_mean honestly reflects the model's compute throughput
+            # rather than being inflated by burst releases from a backlog.
+            "queue max-size-buffers=1 leaky=upstream",
         ]
 
     src_parts.append("mux.sink_0")
