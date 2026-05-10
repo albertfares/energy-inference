@@ -246,12 +246,63 @@ At unbounded FPS and FP32, across all three model configurations:
 - The GPU rail fraction drops from ~52% (YOLOv8n) to ~40% (SSDLite) in DeepStream, reflecting
   the lighter inference workload relative to system overhead.
 
+## fps_mean Inflation Artefact — Explanation
+
+This section explains why `fps_mean` diverges from `fps_p50` at `target_fps > 15` in the
+DeepStream SSDLite sweep, and why the issue persists even after attempting a queue-level fix.
+
+### What fps_mean and fps_p50 measure
+
+- **`fps_mean`** = `n_frames / duration` — total frames counted at the output (`fakesink`) divided
+  by the benchmark window. It is inflated whenever a burst of frames arrives at the output, because
+  a burst raises `n_frames` without changing `duration`.
+- **`fps_p50`** = median of instantaneous inter-frame FPS — the 50th percentile of `1 / Δt` between
+  consecutive output frames. It reflects the *typical* cadence and is resistant to bursts.
+
+When `fps_mean ≈ target_fps` but `fps_p50 ≈ compute_ceiling`, the pipeline is producing frames at
+the compute rate most of the time but releasing occasional bursts, inflating the total count.
+
+### Why the artefact occurs
+
+The DeepStream pipeline is:
+
+```
+v4l2src → videorate → jpegdec → nvvideoconvert → [queue] → nvstreammux → nvinfer → fakesink
+```
+
+When `target_fps` exceeds the model's compute ceiling (~15 fps for SSDLite TRT):
+
+1. **`videorate`** produces frames at the target rate (e.g., 20 fps) and injects them into the queue.
+2. **`nvinfer`** can only process ~15 fps. It applies backpressure upstream, eventually stalling
+   `nvstreammux`.
+3. **`nvstreammux`** with `live-source=1` is designed not to block its source: it accepts incoming
+   frames eagerly and buffers them internally while waiting for `nvinfer` to become free.
+4. When `nvinfer` finishes a frame, `nvstreammux` immediately feeds the next buffered frame — this
+   can happen in rapid succession if several frames accumulated, creating a **burst** at `fakesink`.
+5. The burst inflates `n_frames` and therefore `fps_mean`, while `fps_p50` remains at the true
+   compute rate.
+
+### Why a queue-level fix (leaky=upstream) did not resolve it
+
+Changing the queue before `mux.sink_0` from `leaky=downstream` (drops oldest) to `leaky=upstream`
+(drops newest) was intended to prevent the backlog from forming. However, `nvstreammux` with
+`live-source=1` drains the queue **faster than nvinfer processes frames** — it pulls frames into its
+own internal buffer regardless of whether nvinfer is ready. The backlog therefore shifts from the
+GStreamer queue into nvstreammux's internal buffer, and the burst behaviour at the output is
+unchanged.
+
+A robust fix would require rate-limiting at the `fakesink` pad probe level (skip frames that arrive
+sooner than `1/target_fps` seconds after the previous one), which throttles the *counted* output
+rather than the pipeline buffer. This was not implemented; instead, the two affected data points
+(`target_fps = 20` and `25`) are excluded from the analysis.
+
+---
+
 ## Data Quality Notes — SSDLite
 
 - **target_fps = 20 and 25 (DeepStream):** `fps_mean` reports 20.0 and 25.0 respectively, but
-  `fps_p50` is ~15.4 and 15.6 fps — matching the TRT engine's compute ceiling. This indicates
-  nvstreammux is buffering frames and releasing them in bursts when nvinfer becomes available,
-  inflating the frame count at `fakesink`. These rows are excluded from the summary table.
+  `fps_p50` is ~15.4 and 15.6 fps — matching the TRT engine's compute ceiling. This is the
+  nvstreammux buffering artefact described above. These rows are excluded from the summary table.
 
 - **target_fps = 30 (DeepStream):** The engine cannot reach 30 fps; all three repeats report
   ~15.0 fps mean. However, energy values show a split: repeat 0 measures 945 J (15.75 W) while
