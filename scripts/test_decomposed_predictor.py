@@ -52,6 +52,10 @@ def load_predictor() -> dict:
         print(f"ERROR: predictor not found at {PREDICTOR_PATH}", file=sys.stderr)
         print("Run: python3 scripts/train_decomposed_predictor.py", file=sys.stderr)
         sys.exit(1)
+    # The payload contains pickled references to functions defined in
+    # train_decomposed_predictor — import it first so joblib can find them.
+    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+    import train_decomposed_predictor  # noqa: F401
     return joblib.load(PREDICTOR_PATH)
 
 
@@ -240,9 +244,6 @@ def main() -> None:
     args = parse_args()
     payload = load_predictor()
 
-    # Import predict_pipeline from the training script (it's saved in the payload
-    # but we can also call it directly)
-    sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
     from train_decomposed_predictor import predict_pipeline
 
     if args.validate:
