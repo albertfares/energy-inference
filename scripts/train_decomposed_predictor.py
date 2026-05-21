@@ -125,53 +125,90 @@ def load_data() -> pd.DataFrame:
 
     # ── Unify inference columns (YOLO fused vs torchvision separate) ──────────
     # YOLO: infer_fused_lat covers preprocess+infer+postprocess together.
-    #       We assign it to infer and set postprocess=0.
-    # Torchvision: infer_lat covers the forward pass only; postprocess is separate.
+    #       We assign it to infer and set preprocess/postprocess to 0.
+    # Torchvision (SSDLite): all stages are measured separately.
 
     is_yolo = df["model_family"] == "yolo"
 
+    # Inference latency / energy
     df["infer_lat_ms"] = np.where(
         is_yolo,
         pd.to_numeric(df.get("infer_fused_lat_mean_ms", np.nan), errors="coerce"),
         pd.to_numeric(df.get("infer_lat_mean_ms", np.nan), errors="coerce"),
     )
-    df["infer_energy_j"] = np.where(
+    df["infer_run_energy_j"] = np.where(
         is_yolo,
         pd.to_numeric(df.get("infer_fused_energy_j", np.nan), errors="coerce"),
         pd.to_numeric(df.get("infer_energy_j", np.nan), errors="coerce"),
     )
+
+    # Preprocess: 0 for YOLO (fused into infer_fused), separate for torchvision
+    df["preprocess_lat_ms"] = np.where(
+        is_yolo,
+        0.0,
+        pd.to_numeric(df.get("preprocess_lat_mean_ms", np.nan), errors="coerce"),
+    )
+    df["preprocess_run_energy_j"] = np.where(
+        is_yolo,
+        0.0,
+        pd.to_numeric(df.get("preprocess_energy_j", np.nan), errors="coerce"),
+    )
+
+    # Postprocess: 0 for YOLO (fused), separate for torchvision
     df["postprocess_lat_ms"] = np.where(
         is_yolo,
-        0.0,  # already included in infer_fused
+        0.0,
         pd.to_numeric(df.get("postprocess_lat_mean_ms", np.nan), errors="coerce"),
     )
-    df["postprocess_energy_j"] = np.where(
+    df["postprocess_run_energy_j"] = np.where(
         is_yolo,
         0.0,
         pd.to_numeric(df.get("postprocess_energy_j", np.nan), errors="coerce"),
     )
 
-    # Rename existing columns for consistency
-    df["capture_lat_ms"]    = pd.to_numeric(df.get("capture_lat_mean_ms",    np.nan), errors="coerce")
-    df["preprocess_lat_ms"] = pd.to_numeric(df.get("preprocess_lat_mean_ms", np.nan), errors="coerce")
-    df["capture_e_j"]       = pd.to_numeric(df.get("capture_energy_j",       np.nan), errors="coerce")
-    df["preprocess_e_j"]    = pd.to_numeric(df.get("preprocess_energy_j",    np.nan), errors="coerce")
-    df["idle_j"]            = pd.to_numeric(df.get("idle_j",                 np.nan), errors="coerce")
+    # Capture
+    df["capture_lat_ms"]       = pd.to_numeric(df.get("capture_lat_mean_ms", np.nan), errors="coerce")
+    df["capture_run_energy_j"] = pd.to_numeric(df.get("capture_energy_j",    np.nan), errors="coerce")
 
-    # Drop rows where any stage data is missing
+    # Idle / overhead
+    df["idle_run_j"] = pd.to_numeric(df.get("idle_j", np.nan), errors="coerce")
+
+    # n_frames column (may be named n_timed or n_frames depending on sweep version)
+    if "n_timed" in df.columns:
+        df["n_frames"] = pd.to_numeric(df["n_timed"], errors="coerce")
+    else:
+        df["n_frames"] = pd.to_numeric(df.get("n_frames", np.nan), errors="coerce")
+
+    # ── Convert total-run energies → per-frame energies ───────────────────────
+    # All *_energy_j columns in sweep_summary.csv are totals for the entire run.
+    # Divide by n_frames to get per-frame values (matching energy_per_frame_j).
+    n = df["n_frames"].clip(lower=1)
+    df["capture_e_j"]       = df["capture_run_energy_j"]    / n
+    df["preprocess_e_j"]    = df["preprocess_run_energy_j"] / n
+    df["infer_energy_j"]    = df["infer_run_energy_j"]      / n
+    df["postprocess_e_j"]   = df["postprocess_run_energy_j"]/ n
+    df["idle_per_frame_j"]  = df["idle_run_j"]              / n
+
+    # Drop rows where required stage data is still missing after the fixes above
     stage_cols = [
         "capture_lat_ms", "preprocess_lat_ms", "infer_lat_ms", "postprocess_lat_ms",
-        "capture_e_j",    "preprocess_e_j",    "infer_energy_j", "postprocess_energy_j",
-        "fps_mean", "energy_per_frame_j",
+        "capture_e_j",    "preprocess_e_j",    "infer_energy_j", "postprocess_e_j",
+        "fps_mean", "energy_per_frame_j", "n_frames",
     ]
     n_before = len(df)
     df = df.dropna(subset=stage_cols).copy()
     print(f"Loaded {n_before} ok rows → {len(df)} rows with complete stage data.")
 
-    # Convert energy to mJ for readability
-    for col in ["capture_e_j", "preprocess_e_j", "infer_energy_j", "postprocess_energy_j",
-                "idle_j", "energy_per_frame_j"]:
-        df[col.replace("_j", "_mj")] = df[col] * 1000
+    # Convert per-frame energies to mJ for readability
+    for src, dst in [
+        ("capture_e_j",      "capture_e_mj"),
+        ("preprocess_e_j",   "preprocess_e_mj"),
+        ("infer_energy_j",   "infer_energy_mj"),
+        ("postprocess_e_j",  "postprocess_energy_mj"),
+        ("idle_per_frame_j", "idle_mj"),
+        ("energy_per_frame_j", "energy_per_frame_mj"),
+    ]:
+        df[dst] = df[src] * 1000
 
     return df
 
@@ -238,11 +275,11 @@ def postprocess_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 STAGE_CFG = {
-    #  name            features_fn         lat_col              energy_col
-    "capture":    (capture_features,    "capture_lat_ms",    "capture_e_mj"),
-    "preprocess": (preprocess_features, "preprocess_lat_ms", "preprocess_e_mj"),
-    "infer":      (infer_features,      "infer_lat_ms",      "infer_energy_mj"),
-    "postprocess":(postprocess_features,"postprocess_lat_ms","postprocess_energy_mj"),
+    #  name             features_fn          lat_col               energy_col
+    "capture":    (capture_features,    "capture_lat_ms",     "capture_e_mj"),
+    "preprocess": (preprocess_features, "preprocess_lat_ms",  "preprocess_e_mj"),
+    "infer":      (infer_features,      "infer_lat_ms",       "infer_energy_mj"),
+    "postprocess":(postprocess_features,"postprocess_lat_ms", "postprocess_energy_mj"),
 }
 
 
@@ -351,11 +388,13 @@ def estimate_overhead(df: pd.DataFrame) -> float:
     """
     Estimate the background idle power draw (W).
 
-    idle_j is the energy attributed to the idle period within each timed window
-    by attribute_stage_energy(). P_overhead = idle_j / T_frame.
+    idle_per_frame_j is the idle energy per frame (total idle_j / n_frames).
+    T_frame_s = 1 / fps_mean.
+    P_overhead = idle_per_frame_j / T_frame_s.
     """
     T_frame_s = 1.0 / df["fps_mean"].clip(lower=0.1)
-    P_idle = df["idle_mj"] / 1000.0 / T_frame_s  # W
+    # idle_mj is already per-frame (converted in load_data)
+    P_idle = (df["idle_mj"] / 1000.0) / T_frame_s  # W
     P_idle = P_idle[np.isfinite(P_idle) & (P_idle > 0)]
     p_overhead = float(P_idle.median())
     print(f"\nOverhead power estimate:  median={p_overhead:.3f} W  "
