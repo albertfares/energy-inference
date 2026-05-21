@@ -334,9 +334,21 @@ def loocv_stage(
                 m.fit(X_tr, y_tr)
                 y_pred = np.maximum(m.predict(X_te), 0.0)
 
-            mae  = mean_absolute_error(y_te, y_pred)
-            mape = mean_absolute_percentage_error(y_te + 1e-9, y_pred + 1e-9) * 100
-            r2   = r2_score(y_te, y_pred) if len(y_te) > 1 else float("nan")
+            mae = mean_absolute_error(y_te, y_pred)
+            r2  = r2_score(y_te, y_pred) if len(y_te) > 1 else float("nan")
+
+            # MAPE is undefined when actual values are zero (division by zero).
+            # Skip it for constant-zero targets (e.g. preprocess/postprocess for YOLO).
+            nonzero = np.abs(y_te.values) > 1e-6
+            if nonzero.sum() > 0:
+                mape = float(np.mean(
+                    np.abs(y_pred[nonzero] - y_te.values[nonzero])
+                    / np.abs(y_te.values[nonzero])
+                ) * 100)
+                mape_str = f"{mape:5.1f}%"
+            else:
+                mape = float("nan")
+                mape_str = "  n/a (zero target)"
 
             rows.append({
                 "stage":    stage_name,
@@ -350,7 +362,7 @@ def loocv_stage(
             print(
                 f"  [{stage_name:12s}] hold={hold:<40s}  "
                 f"target={target_col:<25s}  "
-                f"MAE={mae*scale:7.2f}{unit}  MAPE={mape:5.1f}%"
+                f"MAE={mae*scale:7.2f}{unit}  MAPE={mape_str}"
             )
 
     return pd.DataFrame(rows)
@@ -786,9 +798,12 @@ def main() -> None:
     cv_all.to_csv(cv_csv, index=False)
     print(f"\nSaved CV results → {cv_csv}")
 
-    print("\n── CV summary (mean MAPE per stage) ────────────────────────")
-    summary = cv_all.groupby(["stage", "target"])["mape_pct"].mean().round(1)
-    print(summary.to_string())
+    print("\n── CV summary (mean MAPE per stage, ignoring zero-target rows) ────")
+    summary = cv_all.groupby(["stage", "target"])["mape_pct"].mean().round(1)  # nanmean by default
+    # Show MAE too, which is always meaningful
+    mae_summary = cv_all.groupby(["stage", "target"])["mae"].mean().round(4)
+    combined_summary = pd.DataFrame({"mean_MAPE_%": summary, "mean_MAE": mae_summary})
+    print(combined_summary.to_string())
 
     # 4. Train final models on all data
     print("\n── Training final models on all data ───────────────────────")
