@@ -61,6 +61,8 @@ from train_decomposed_predictor import (
     MODEL_LABELS,
     MODEL_FAMILY,
     STAGES,
+    SHARED_STAGES,
+    PER_MODEL_STAGES,
 )
 
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -122,8 +124,8 @@ def safe_bias(actual: np.ndarray, pred: np.ndarray, thr: float = 1e-3) -> float:
     return float(np.mean((pred[mask] - actual[mask]) / np.abs(actual[mask])) * 100)
 
 
-def train_stage_on_subset(df: pd.DataFrame, stage: str) -> dict:
-    """Train latency + energy models for one stage on the given data subset."""
+def _fit_one_subset(df: pd.DataFrame, stage: str) -> dict:
+    """Fit lat + energy predictors for one stage on a single data subset."""
     feat_fn   = FEATURE_FNS[stage]
     lat_col, energy_col = STAGE_COL_MAP[stage]
     X = feat_fn(df)
@@ -133,12 +135,30 @@ def train_stage_on_subset(df: pd.DataFrame, stage: str) -> dict:
         if y.isna().any():
             models[col] = None
         elif y.std() < 1e-9:
-            models[col] = "zero"
+            models[col] = ("constant", float(y.mean()))
+        elif all(X[c].std() < 1e-9 for c in X.columns):
+            models[col] = ("constant", float(y.mean()))
         else:
             m = make_model()
             m.fit(X, y)
             models[col] = m
     return models
+
+
+def train_stage_on_subset(df: pd.DataFrame, stage: str) -> dict:
+    """
+    Train latency + energy models for one stage.
+
+    Mirrors Phase 3 in train_decomposed_predictor: shared stages return
+    {target_col: predictor}; per-model stages return
+    {model_short: {target_col: predictor}}.
+    """
+    if stage in SHARED_STAGES:
+        return _fit_one_subset(df, stage)
+    per_model: dict = {}
+    for model_name, df_model in df.groupby("model_short"):
+        per_model[str(model_name)] = _fit_one_subset(df_model, stage)
+    return per_model
 
 
 def predict_with_local_payload(
@@ -174,13 +194,28 @@ def predict_with_local_payload(
     for stage in STAGES:
         feat_fn          = FEATURE_FNS[stage]
         lat_col, e_col   = STAGE_COL_MAP[stage]
-        s_models         = payload["stage_models"][stage]
+        root             = payload["stage_models"][stage]
         X_pred           = feat_fn(row)
+
+        # Phase 3: per-model stages look up by model name; raise if missing.
+        if stage in PER_MODEL_STAGES:
+            if model_short not in root:
+                raise KeyError(
+                    f"No '{stage}' predictor registered for model "
+                    f"'{model_short}'. Available: {sorted(root.keys())}. "
+                    f"This indicates the held-out fold has no other examples "
+                    f"of this model — explicit Phase 3 failure mode."
+                )
+            s_models = root[model_short]
+        else:
+            s_models = root
 
         for col_key, out_key in [(lat_col, f"T_{stage}_ms"), (e_col, f"E_{stage}_mj")]:
             m = s_models.get(col_key)
             if m is None or m == "zero":
                 results[out_key] = 0.0
+            elif isinstance(m, tuple) and len(m) == 2 and m[0] == "constant":
+                results[out_key] = float(m[1])
             else:
                 results[out_key] = float(np.maximum(m.predict(X_pred)[0], 0.0))
 
@@ -257,6 +292,31 @@ def run_loocv(df: pd.DataFrame) -> pd.DataFrame:
             print(f"  SKIP — only {n_train} training rows, not enough to fit.")
             continue
 
+        # ── Phase 3: detect explicit "model not in training" failure mode ─────
+        held_model_short = df_test["model_short"].iloc[0]
+        train_models     = set(df_train["model_short"].unique())
+        model_in_train   = held_model_short in train_models
+
+        if not model_in_train:
+            # Record every test row as a Phase 3 explicit failure (no silent
+            # garbage). The summary tooling treats these as a separate category.
+            print(f"  EXPLICIT FAILURE — model '{held_model_short}' has no "
+                  f"other examples in training set. Recording {n_test} rows "
+                  f"as 'model_not_in_training' (no prediction attempted).")
+            for _, row in df_test.iterrows():
+                all_rows.append({
+                    "held_out_config":           hold,
+                    "model":                     row["model_short"],
+                    "imgsz":                     int(row["imgsz"]),
+                    "precision":                 row["precision"],
+                    "target_fps":                row["target_fps"],
+                    "status":                    "model_not_in_training",
+                    "actual_fps":                row["fps_mean"],
+                    "actual_E_total_mj":         row["energy_per_frame_mj"],
+                    # No prediction columns — keep them NaN for honest aggregation.
+                })
+            continue
+
         # ── Retrain every stage ────────────────────────────────────────────────
         stage_models: dict[str, dict] = {}
         for stage in STAGES:
@@ -295,6 +355,7 @@ def run_loocv(df: pd.DataFrame) -> pd.DataFrame:
                 "imgsz":      int(row["imgsz"]),
                 "precision":  row["precision"],
                 "target_fps": row["target_fps"],
+                "status":     "ok",
 
                 # Predicted stage latencies (ms)
                 "pred_T_capture_ms":    pred["T_capture_ms"],
@@ -367,22 +428,49 @@ def run_loocv(df: pd.DataFrame) -> pd.DataFrame:
 # ── Summaries ──────────────────────────────────────────────────────────────────
 
 def summary_by_config(results: pd.DataFrame) -> pd.DataFrame:
-    """Per held-out config: MAPE + bias + fragile stage."""
+    """Per held-out config: MAPE + bias + fragile stage.
+
+    Phase 3: rows with status='model_not_in_training' are reported separately
+    as explicit failures rather than mixed into numerical aggregates.
+    """
     rows = []
     for cfg, grp in results.groupby("held_out_config"):
+        # Split explicit-failure rows from successful predictions
+        failed = grp[grp.get("status", "ok") == "model_not_in_training"]
+        ok     = grp[grp.get("status", "ok") == "ok"]
+
+        if len(failed) > 0 and len(ok) == 0:
+            # All rows failed → no numerical metrics possible
+            rows.append({
+                "config":          cfg,
+                "n_rows":          len(grp),
+                "n_predicted":     0,
+                "n_failed":        len(failed),
+                "status":          "model_not_in_training",
+                "fps_MAPE_%":      float("nan"),
+                "fps_bias_%":      float("nan"),
+                "E_total_MAPE_%":  float("nan"),
+                "E_total_bias_%":  float("nan"),
+                "fragile_stage":   "model missing from training set",
+            })
+            continue
+
         row: dict = {
             "config":              cfg,
             "n_rows":              len(grp),
-            "fps_MAPE_%":          safe_mape(grp["actual_fps"].values,       grp["pred_fps"].values),
-            "fps_bias_%":          safe_bias(grp["actual_fps"].values,       grp["pred_fps"].values),
-            "E_total_MAPE_%":      safe_mape(grp["actual_E_total_mj"].values,grp["pred_E_total_mj"].values),
-            "E_total_bias_%":      safe_bias(grp["actual_E_total_mj"].values,grp["pred_E_total_mj"].values),
+            "n_predicted":         len(ok),
+            "n_failed":            len(failed),
+            "status":              "ok",
+            "fps_MAPE_%":          safe_mape(ok["actual_fps"].values,       ok["pred_fps"].values),
+            "fps_bias_%":          safe_bias(ok["actual_fps"].values,       ok["pred_fps"].values),
+            "E_total_MAPE_%":      safe_mape(ok["actual_E_total_mj"].values,ok["pred_E_total_mj"].values),
+            "E_total_bias_%":      safe_bias(ok["actual_E_total_mj"].values,ok["pred_E_total_mj"].values),
         }
         # Per-stage energy MAPE
         stage_mapes: dict[str, float] = {}
         for stage in STAGES:
             col = f"{stage}_E_err_pct"
-            vals = grp[col].dropna()
+            vals = ok[col].dropna() if col in ok.columns else pd.Series(dtype=float)
             mape = np.mean(np.abs(vals)) if len(vals) else float("nan")
             row[f"{stage}_E_MAPE_%"] = round(mape, 1)
             stage_mapes[stage] = mape if not np.isnan(mape) else -1.0
@@ -434,6 +522,11 @@ def print_insights(cfg_summary: pd.DataFrame, stage_summary: pd.DataFrame) -> No
     print(f"  {'Config':<42}  {'FPS MAPE':>9}  {'E MAPE':>8}  {'Bias E%':>8}  {'Fragile stage'}")
     print(f"  {'─'*42}  {'─'*9}  {'─'*8}  {'─'*8}  {'─'*14}")
     for _, r in cfg_summary.iterrows():
+        status = r.get("status", "ok")
+        if status == "model_not_in_training":
+            print(f"  {r['config']:<42}  {'─':>9}  {'─':>8}  {'─':>8}  "
+                  f"⚠ no predictor (model absent from training set)")
+            continue
         fps_m = f"{r['fps_MAPE_%']:.1f}%" if not np.isnan(r['fps_MAPE_%']) else "  n/a"
         e_m   = f"{r['E_total_MAPE_%']:.1f}%" if not np.isnan(r['E_total_MAPE_%']) else "  n/a"
         e_b   = f"{r['E_total_bias_%']:+.1f}%" if not np.isnan(r['E_total_bias_%']) else "  n/a"
@@ -450,7 +543,16 @@ def print_insights(cfg_summary: pd.DataFrame, stage_summary: pd.DataFrame) -> No
 
     print("\n  Key observations:")
 
-    # Find most fragile config
+    # Phase 3: explicit-failure configs (no predictor exists for the held-out model)
+    if "status" in cfg_summary.columns:
+        missing = cfg_summary[cfg_summary["status"] == "model_not_in_training"]
+        if not missing.empty:
+            for _, r in missing.iterrows():
+                print(f"  ⚠ EXPLICIT FAILURE   : {r['config']}  "
+                      f"({r['n_failed']} rows) — model not in training set; "
+                      f"predictor correctly refuses to extrapolate.")
+
+    # Find most fragile config (only among configs that were actually predicted)
     valid = cfg_summary.dropna(subset=["E_total_MAPE_%"])
     if not valid.empty:
         worst = valid.loc[valid["E_total_MAPE_%"].idxmax()]
@@ -617,6 +719,17 @@ def plot_config_summary_bars(cfg_summary: pd.DataFrame, out_dir: Path) -> None:
     bars_e   = ax.bar(x + width/2, cfg_summary["E_total_MAPE_%"].fillna(0),
                       width, label="Energy MAPE", color="#DD8452", alpha=0.85)
 
+    # Phase 3: annotate explicit-failure folds (no predictor exists for the
+    # held-out model). The bars are 0-height there because cfg_summary stores
+    # NaN MAPE for those rows, so we overlay a clear text marker.
+    if "status" in cfg_summary.columns:
+        for i, status in enumerate(cfg_summary["status"].values):
+            if status == "model_not_in_training":
+                ax.text(x[i], 1.0, "⚠ no predictor",
+                        ha="center", va="bottom",
+                        color="#C44E52", fontsize=9, fontweight="bold",
+                        rotation=0)
+
     ax.axhline(10, color="gray", linestyle="--", linewidth=1, label="10% target")
     ax.set_xticks(x)
     ax.set_xticklabels(cfgs, rotation=30, ha="right", fontsize=9)
@@ -708,10 +821,22 @@ def main() -> None:
     print_insights(cfg_summary, stage_summary)
 
     # ── Plots ──────────────────────────────────────────────────────────────────
+    # Phase 3: drop explicit-failure rows before plotting so axes don't get
+    # NaN-poisoned; the failures are still reported via cfg_summary and the
+    # console insights above.
+    if "status" in results.columns:
+        results_ok = results[results["status"] == "ok"].copy()
+    else:
+        results_ok = results
+
     print("── Generating plots ────────────────────────────────────────")
-    plot_fragility_heatmap(results, OUT_DIR)
-    plot_pred_vs_actual(results, OUT_DIR)
-    plot_error_by_fps(results, OUT_DIR)
+    if not results_ok.empty:
+        plot_fragility_heatmap(results_ok, OUT_DIR)
+        plot_pred_vs_actual(results_ok, OUT_DIR)
+        plot_error_by_fps(results_ok, OUT_DIR)
+
+    # Bar / bias charts use cfg_summary, which already encodes failure rows
+    # as their own visual category.
     plot_config_summary_bars(cfg_summary, OUT_DIR)
     plot_bias_chart(cfg_summary, OUT_DIR)
 

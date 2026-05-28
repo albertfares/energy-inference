@@ -87,6 +87,14 @@ MODEL_FAMILY: dict[str, str] = {
 
 STAGES = ["capture", "preprocess", "infer", "postprocess"]
 
+# Phase 3: which stages are shared across all models vs trained per-model.
+# Capture is shared because the camera's hardware doesn't care about the model.
+# Preprocess / inference / postprocess are per-model: each model gets its own
+# sub-predictor, registered in a dict keyed by model_short. Adding a new model
+# means adding a new dict entry, not retraining the others.
+SHARED_STAGES    = ["capture"]
+PER_MODEL_STAGES = ["preprocess", "infer", "postprocess"]
+
 plt.rcParams.update({
     "figure.dpi": 130,
     "axes.spines.top": False,
@@ -259,12 +267,12 @@ def preprocess_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def infer_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Inference: model forward pass on CUDA.
-    Depends on model (one-hot), imgsz, and precision.
+    Inference features within a single model's data (Phase 3: per-model predictor).
+    Model identity is no longer a feature — it is the dict key under which this
+    predictor is registered. The remaining variation is captured by imgsz and
+    precision.
     """
     feat = pd.DataFrame(index=df.index)
-    for label in ["yolov8n", "ssdlite320"]:
-        feat[f"model_{label}"] = (df["model_short"] == label).astype(float)
     feat["imgsz"]   = df["imgsz"]
     feat["is_fp16"] = df["is_fp16"]
     return feat
@@ -272,12 +280,14 @@ def infer_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def postprocess_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Postprocess: NMS + box decode.
-    For YOLO this is fused into inference (always 0 here).
-    For torchvision models it is a separate CPU step.
+    Postprocess features within a single model's data (Phase 3: per-model
+    predictor). The fused-vs-separate distinction (YOLO vs torchvision) is now
+    handled by which model's predictor is looked up, not by a feature flag.
+    imgsz is included because NMS cost scales with the number of candidate boxes,
+    which scales with the inference grid size.
     """
     feat = pd.DataFrame(index=df.index)
-    feat["is_torchvision"] = (df["model_family"] == "torchvision").astype(float)
+    feat["imgsz"] = df["imgsz"]
     return feat
 
 
@@ -311,31 +321,67 @@ def loocv_stage(
     stage_name: str,
 ) -> pd.DataFrame:
     """
-    Run leave-one-config-out CV for one stage.
-    Returns a DataFrame with per-fold metrics for both lat and energy targets.
+    Per-stage leave-one-config-out CV.
+
+    For SHARED stages (capture), one model is fitted on all-but-one configs.
+    For PER-MODEL stages, each held-out config is predicted by the per-model
+    block that owns it. If the held-out config is the only example of its
+    model, that fold is skipped and recorded with status='skipped_model_alone'
+    — this is the explicit "loud failure" mode introduced in Phase 3.
     """
     configs = config_key(df)
     unique_configs = sorted(configs.unique())
-    X = features_fn(df)
+    is_per_model = stage_name in PER_MODEL_STAGES
 
     rows = []
     for hold in unique_configs:
         test_mask  = configs == hold
         train_mask = ~test_mask
-        X_tr, X_te = X[train_mask], X[test_mask]
+        df_tr = df[train_mask]
+        df_te = df[test_mask]
 
-        for target_col, unit, scale in [
-            (lat_col,    "ms", 1.0),
-            (energy_col, "mJ", 1.0),
-        ]:
-            y_tr = df.loc[train_mask, target_col]
-            y_te = df.loc[test_mask,  target_col]
+        # ── Determine the training subset relevant to this fold ──────────────
+        if is_per_model:
+            # The held-out config belongs to exactly one model. We only need
+            # rows of that same model to fit its per-model predictor.
+            held_model    = df_te["model_short"].iloc[0]
+            df_tr_for_fit = df_tr[df_tr["model_short"] == held_model]
+            if df_tr_for_fit.empty:
+                # No other configs of this model in training → can't fit.
+                for target_col in [lat_col, energy_col]:
+                    rows.append({
+                        "stage":    stage_name,
+                        "target":   target_col,
+                        "held_out": hold,
+                        "n_test":   int(test_mask.sum()),
+                        "mae":      float("nan"),
+                        "mape_pct": float("nan"),
+                        "r2":       float("nan"),
+                        "status":   "skipped_model_alone",
+                    })
+                print(
+                    f"  [{stage_name:12s}] hold={hold:<40s}  "
+                    f"SKIPPED — model '{held_model}' has no other configs in training"
+                )
+                continue
+        else:
+            df_tr_for_fit = df_tr
+
+        X_tr = features_fn(df_tr_for_fit)
+        X_te = features_fn(df_te)
+
+        for target_col, unit in [(lat_col, "ms"), (energy_col, "mJ")]:
+            y_tr = df_tr_for_fit[target_col]
+            y_te = df_te[target_col]
 
             if y_tr.isna().any() or y_te.isna().any():
                 continue
             if y_tr.std() < 1e-9:
-                # Constant target (e.g. postprocess for YOLO = 0)
-                y_pred = np.zeros(len(y_te))
+                # Target is constant in training (e.g. postprocess for YOLO = 0)
+                y_pred = np.full(len(y_te), float(y_tr.mean()))
+            elif all(X_tr[c].std() < 1e-9 for c in X_tr.columns):
+                # No feature variation; fall back to the training mean
+                y_pred = np.full(len(y_te), float(y_tr.mean()))
             else:
                 m = make_model()
                 m.fit(X_tr, y_tr)
@@ -344,8 +390,6 @@ def loocv_stage(
             mae = mean_absolute_error(y_te, y_pred)
             r2  = r2_score(y_te, y_pred) if len(y_te) > 1 else float("nan")
 
-            # MAPE is undefined when actual values are zero (division by zero).
-            # Skip it for constant-zero targets (e.g. preprocess/postprocess for YOLO).
             nonzero = np.abs(y_te.values) > 1e-6
             if nonzero.sum() > 0:
                 mape = float(np.mean(
@@ -365,11 +409,12 @@ def loocv_stage(
                 "mae":      mae,
                 "mape_pct": mape,
                 "r2":       r2,
+                "status":   "ok",
             })
             print(
                 f"  [{stage_name:12s}] hold={hold:<40s}  "
                 f"target={target_col:<25s}  "
-                f"MAE={mae*scale:7.2f}{unit}  MAPE={mape_str}"
+                f"MAE={mae:7.2f}{unit}  MAPE={mape_str}"
             )
 
     return pd.DataFrame(rows)
@@ -377,28 +422,70 @@ def loocv_stage(
 
 # ── Final model training ───────────────────────────────────────────────────────
 
-def train_stage(
+def _fit_one_stage(
     df: pd.DataFrame,
     features_fn,
     lat_col: str,
     energy_col: str,
 ) -> dict:
-    """Train final models on all data for one stage. Returns {target: model}."""
+    """
+    Fit latency + energy predictors for one stage on a single data subset.
+    Returns {target_col: predictor_or_constant_marker}.
+
+    Marker conventions:
+      None                    : target was NaN in this subset (don't predict)
+      ("constant", value)     : target was effectively constant; return value at predict time
+      sklearn Pipeline object : fitted model
+    """
     X = features_fn(df)
-    models = {}
+    models: dict = {}
     for target_col in [lat_col, energy_col]:
         y = df[target_col]
         if y.isna().any():
             models[target_col] = None
             continue
         if y.std() < 1e-9:
-            # Constant (e.g., postprocess latency for YOLO = 0)
-            models[target_col] = "zero"
+            # Target itself is constant (e.g. postprocess for YOLO = 0)
+            models[target_col] = ("constant", float(y.mean()))
+            continue
+        if all(X[c].std() < 1e-9 for c in X.columns):
+            # No variation in features (e.g. a model with only one (imgsz, precision)
+            # combination). Polynomial Ridge would fail; use the mean instead.
+            models[target_col] = ("constant", float(y.mean()))
             continue
         m = make_model()
         m.fit(X, y)
         models[target_col] = m
     return models
+
+
+def train_stage(
+    df: pd.DataFrame,
+    features_fn,
+    lat_col: str,
+    energy_col: str,
+    stage_name: str,
+) -> dict:
+    """
+    Train final models on all data for one stage.
+
+    For shared stages (capture):    returns {target_col: predictor}.
+    For per-model stages:           returns {model_short: {target_col: predictor}}.
+
+    Per-model stages produce a dict keyed by model_short. Adding a new model
+    means adding a new dict entry without touching the others — the lego
+    block design philosophy. Looking up a missing model at prediction time
+    raises an explicit error in predict_pipeline().
+    """
+    if stage_name in SHARED_STAGES:
+        return _fit_one_stage(df, features_fn, lat_col, energy_col)
+
+    per_model: dict = {}
+    for model_name, df_model in df.groupby("model_short"):
+        per_model[str(model_name)] = _fit_one_stage(
+            df_model, features_fn, lat_col, energy_col
+        )
+    return per_model
 
 
 # ── Overhead estimation ────────────────────────────────────────────────────────
@@ -621,17 +708,40 @@ def predict_pipeline(
     }])
 
     results: dict[str, float] = {}
-    feature_fns = payload["feature_fns"]
+    feature_fns      = payload["feature_fns"]
+    shared_stages    = set(payload.get("shared_stages",    SHARED_STAGES))
+    per_model_stages = set(payload.get("per_model_stages", PER_MODEL_STAGES))
 
     for stage, (lat_col, energy_col) in payload["stage_col_map"].items():
         feat_fn  = feature_fns[stage]
         X_pred   = feat_fn(row)
-        s_models = stage_models[stage]
+        root     = stage_models[stage]
+
+        # Phase 3: per-model stages look up by model name; shared stages use root.
+        if stage in per_model_stages:
+            if model_short not in root:
+                raise ValueError(
+                    f"No '{stage}' predictor registered for model "
+                    f"'{model_short}'. Available: {sorted(root.keys())}. "
+                    f"Train a predictor for this model first (Phase 3 design: "
+                    f"adding a new model means registering a new block)."
+                )
+            s_models = root[model_short]
+        elif stage in shared_stages:
+            s_models = root
+        else:
+            # Backward-compat: stages not declared in either set are assumed shared
+            s_models = root
 
         for col_key, out_key in [(lat_col, f"T_{stage}_ms"), (energy_col, f"E_{stage}_mj")]:
             m = s_models.get(col_key)
-            if m is None or m == "zero":
+            if m is None:
                 results[out_key] = 0.0
+            elif m == "zero":
+                # Legacy marker from pre-Phase-3 payloads
+                results[out_key] = 0.0
+            elif isinstance(m, tuple) and len(m) == 2 and m[0] == "constant":
+                results[out_key] = float(m[1])
             else:
                 results[out_key] = float(np.maximum(m.predict(X_pred)[0], 0.0))
 
@@ -774,25 +884,64 @@ def plot_stage_pred_vs_actual(
     fig, axes = plt.subplots(2, n_stages, figsize=(4 * n_stages, 8))
     fig.suptitle("Stage Predictors — Predicted vs Actual", fontsize=12)
 
+    def _predict_target(stage_root, stage, target_col, df_subset):
+        """Run prediction for one stage+target on a data subset, handling
+        both shared and per-model stage_models layouts."""
+        feat_fn = feature_fns[stage]
+        if stage in PER_MODEL_STAGES:
+            # stage_root is {model_short: {target_col: predictor}}
+            y_pred = np.zeros(len(df_subset))
+            for model_name, sub in stage_root.items():
+                mask = (df_subset["model_short"] == model_name).values
+                if not mask.any():
+                    continue
+                m = sub.get(target_col)
+                X_sub = feat_fn(df_subset[mask])
+                if m is None:
+                    y_pred[mask] = 0.0
+                elif isinstance(m, tuple) and len(m) == 2 and m[0] == "constant":
+                    y_pred[mask] = float(m[1])
+                elif m == "zero":
+                    y_pred[mask] = 0.0
+                else:
+                    y_pred[mask] = np.maximum(m.predict(X_sub), 0.0)
+            return y_pred
+        # shared
+        m = stage_root.get(target_col)
+        X = feat_fn(df_subset)
+        if m is None or m == "zero":
+            return np.zeros(len(df_subset))
+        if isinstance(m, tuple) and len(m) == 2 and m[0] == "constant":
+            return np.full(len(df_subset), float(m[1]))
+        return np.maximum(m.predict(X), 0.0)
+
     for col_i, stage in enumerate(STAGES):
-        feat_fn  = feature_fns[stage]
         lat_col, energy_col = stage_col_map[stage]
-        X = feat_fn(df)
-        s_models = stage_models[stage]
+        s_root = stage_models[stage]
 
         for row_i, (target_col, unit) in enumerate([
             (lat_col, "ms"), (energy_col, "mJ")
         ]):
             ax = axes[row_i][col_i]
-            m = s_models.get(target_col)
 
-            if m is None or m == "zero":
+            # Check if the stage/target has any non-trivial predictor at all
+            has_model = False
+            if stage in PER_MODEL_STAGES:
+                has_model = any(
+                    sub.get(target_col) is not None and sub.get(target_col) != "zero"
+                    for sub in s_root.values()
+                )
+            else:
+                m = s_root.get(target_col)
+                has_model = m is not None and m != "zero"
+
+            if not has_model:
                 ax.set_title(f"{stage}\n{target_col}\n(constant=0)")
                 ax.axis("off")
                 continue
 
             y_true = df[target_col].values
-            y_pred = np.maximum(m.predict(X), 0.0)
+            y_pred = _predict_target(s_root, stage, target_col, df)
 
             for cfg in sorted(configs.unique()):
                 mask = (configs == cfg).values
@@ -986,14 +1135,20 @@ def main() -> None:
             stage_col_map[stage][0],
             stage_col_map[stage][1],
         )
-        stage_models[stage] = train_stage(df, feat_fn, lat_col, energy_col)
-        print(f"  {stage}: trained")
+        stage_models[stage] = train_stage(df, feat_fn, lat_col, energy_col, stage)
+        if stage in PER_MODEL_STAGES:
+            models_trained = sorted(stage_models[stage].keys())
+            print(f"  {stage}: per-model predictors for {models_trained}")
+        else:
+            print(f"  {stage}: shared predictor")
 
     # 5. Save payload
     payload = {
         "stage_models":      stage_models,
         "stage_col_map":     stage_col_map,
         "feature_fns":       feature_fns,
+        "shared_stages":     SHARED_STAGES,
+        "per_model_stages":  PER_MODEL_STAGES,
         "p_overhead_w":      p_overhead,
         "camera_constants":  camera_constants,
         "model_labels":      MODEL_LABELS,
