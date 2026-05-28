@@ -123,6 +123,13 @@ def load_data() -> pd.DataFrame:
     df["is_fp16"] = (df["precision"].str.lower() == "fp16").astype(float)
     df["imgsz"] = pd.to_numeric(df["yolo_imgsz"], errors="coerce").fillna(640).astype(float)
 
+    # SSDLite320 always resizes its input to 320×320 internally (hard-coded in the
+    # torchvision model). The yolo_imgsz column for SSDLite rows is meaningless
+    # (it just got populated with the camera width). Override to the real model
+    # input size so the inference predictor's `imgsz` feature stays semantically
+    # consistent across model families.
+    df.loc[df["model_short"] == "ssdlite320", "imgsz"] = 320.0
+
     # ── Unify inference columns (YOLO fused vs torchvision separate) ──────────
     # YOLO: infer_fused_lat covers preprocess+infer+postprocess together.
     #       We assign it to infer and set preprocess/postprocess to 0.

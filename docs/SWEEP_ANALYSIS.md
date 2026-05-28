@@ -15,9 +15,16 @@
 |---|---|---|---|---|---|
 | `yolov8n_fps_sweep_MAXN_20260428_133405` | YOLOv8n | 640 | fp32 + fp16 | 0, 5, 10, 15, 20, 25, 30 | 42 |
 | `yolov8n_fps_sweep_MAXN_20260428_150803` | YOLOv8n | 320 | fp32 + fp16 | 0, 5, 10, 15, 20, 25, 30 | 42 |
-| `ssdlite_fps_sweep_MAXN_20260428_162918` | SSDLite320-MobileNetV3 | 320 (fixed) | fp32 | 0, 5, 10, 15, 20, 25, 30 | 21 |
+| `ssdlite_fps_sweep_MAXN_20260428_162918` | SSDLite320-MobileNetV3 | 320 (model hard-codes 320×320) | fp32 | 0, 5, 10, 15, 20, 25, 30 | 21 |
 
 All 105 runs completed successfully with full energy attribution.
+
+> **Note on the SSDLite `imgsz` column:** the `yolo_imgsz` column in the SSDLite
+> sweep CSV happens to contain 640 (it was populated with the camera width — the
+> column is YOLO-specific). The torchvision SSDLite320 model always resizes its
+> input to 320×320 internally, so 320 is the semantically correct value. The
+> decomposed predictor's `load_data()` overrides `imgsz = 320` for SSDLite rows
+> to keep the inference feature consistent across model families.
 
 ---
 
