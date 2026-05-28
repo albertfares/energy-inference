@@ -398,20 +398,44 @@ def train_stage(
 
 def estimate_overhead(df: pd.DataFrame) -> float:
     """
-    Estimate the background idle power draw (W).
+    Estimate the sleep / idle power draw (W) during the throttled wait period.
 
-    idle_per_frame_j is the idle energy per frame (total idle_j / n_frames).
-    T_frame_s = 1 / fps_mean.
-    P_overhead = idle_per_frame_j / T_frame_s.
+    Stage energies from INA3221 already include the system's baseline power
+    during their active windows — so adding a constant P × T_frame on top
+    would double-count baseline. The overhead term must therefore measure only
+    the energy consumed during the *sleep* between compute and the next frame,
+    which exists only when target_fps > 0 and T_compute < 1/target_fps.
+
+    Derivation:
+        T_compute_s = sum of measured stage latencies
+        T_sleep_s   = 1/target_fps - T_compute_s    (only valid when positive)
+        idle_per_frame_j is the energy attributed to that sleep window
+        → P_sleep = idle_per_frame_j / T_sleep_s
     """
-    T_frame_s = 1.0 / df["fps_mean"].clip(lower=0.1)
-    # idle_mj is already per-frame (converted in load_data)
-    P_idle = (df["idle_mj"] / 1000.0) / T_frame_s  # W
-    P_idle = P_idle[np.isfinite(P_idle) & (P_idle > 0)]
-    p_overhead = float(P_idle.median())
-    print(f"\nOverhead power estimate:  median={p_overhead:.3f} W  "
-          f"(std={P_idle.std():.3f} W,  n={len(P_idle)})")
-    return p_overhead
+    throttled = df[df["target_fps"] > 0].copy()
+    if throttled.empty:
+        print("\nWARNING: no throttled rows — cannot estimate sleep power; "
+              "falling back to 0 W.")
+        return 0.0
+
+    T_compute_s = (throttled["capture_lat_ms"]    + throttled["preprocess_lat_ms"] +
+                   throttled["infer_lat_ms"]      + throttled["postprocess_lat_ms"]) / 1000.0
+    T_sleep_s   = 1.0 / throttled["target_fps"].astype(float) - T_compute_s
+
+    # Require ≥5 ms of sleep to avoid noisy near-zero divisions
+    valid       = T_sleep_s > 0.005
+    P_sleep     = (throttled.loc[valid, "idle_mj"] / 1000.0) / T_sleep_s[valid]
+    P_sleep     = P_sleep[np.isfinite(P_sleep) & (P_sleep > 0)]
+
+    if P_sleep.empty:
+        print("\nWARNING: no valid throttled rows for sleep-power estimation; "
+              "falling back to 0 W.")
+        return 0.0
+
+    p_sleep = float(P_sleep.median())
+    print(f"\nSleep-power estimate:  median={p_sleep:.3f} W  "
+          f"(std={P_sleep.std():.3f} W,  n={len(P_sleep)})")
+    return p_sleep
 
 
 # ── Combination layer (also saved in payload for inference) ───────────────────
@@ -496,7 +520,11 @@ def predict_pipeline(
 
     fps = 1000.0 / max(T_frame, 1e-3)
 
-    E_overhead = p_overhead * (T_frame / 1000.0) * 1000  # mJ
+    # Overhead only counts the sleep portion: stage energies already include
+    # baseline power during active compute, so we'd double-count if we used
+    # T_frame here. T_sleep == 0 at unbounded FPS or when compute-bound.
+    T_sleep_ms = max(0.0, T_frame - T_compute)
+    E_overhead = p_overhead * (T_sleep_ms / 1000.0) * 1000   # mJ
     E_total    = (results["E_capture_mj"] + results["E_preprocess_mj"] +
                   results["E_infer_mj"]   + results["E_postprocess_mj"] + E_overhead)
 
