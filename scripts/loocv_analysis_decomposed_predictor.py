@@ -56,6 +56,8 @@ from train_decomposed_predictor import (
     infer_features,
     postprocess_features,
     estimate_overhead,
+    estimate_camera_constants,
+    compute_capture_outputs,
     MODEL_LABELS,
     MODEL_FAMILY,
     STAGES,
@@ -182,14 +184,28 @@ def predict_with_local_payload(
             else:
                 results[out_key] = float(np.maximum(m.predict(X_pred)[0], 0.0))
 
+    p_overhead = payload["p_overhead_w"]
+
+    # Phase 2: override capture from the combination layer using camera constants
+    T_other_ms = (results["T_preprocess_ms"] + results["T_infer_ms"] +
+                  results["T_postprocess_ms"])
+    camera_constants = payload.get("camera_constants")
+    if camera_constants:
+        T_cap, E_cap = compute_capture_outputs(
+            camera_constants, p_overhead, width, height, target_fps, T_other_ms
+        )
+        results["T_capture_ms"] = T_cap
+        results["E_capture_mj"] = E_cap
+
     T_compute = (results["T_capture_ms"] + results["T_preprocess_ms"] +
                  results["T_infer_ms"]   + results["T_postprocess_ms"])
 
     T_frame = max(T_compute, 1000.0 / target_fps) if target_fps > 0 else T_compute
     fps     = 1000.0 / max(T_frame, 1e-3)
 
-    p_overhead = payload["p_overhead_w"]
-    E_overhead = p_overhead * (T_frame / 1000.0) * 1000   # mJ
+    # Sleep-only overhead (Phase 1)
+    T_sleep_ms = max(0.0, T_frame - T_compute)
+    E_overhead = p_overhead * (T_sleep_ms / 1000.0) * 1000   # mJ
     E_total    = (results["E_capture_mj"] + results["E_preprocess_mj"] +
                   results["E_infer_mj"]   + results["E_postprocess_mj"] + E_overhead)
 
@@ -246,12 +262,15 @@ def run_loocv(df: pd.DataFrame) -> pd.DataFrame:
         for stage in STAGES:
             stage_models[stage] = train_stage_on_subset(df_train, stage)
 
-        # ── Re-estimate overhead ───────────────────────────────────────────────
-        p_overhead = estimate_overhead(df_train)
+        # ── Re-estimate overhead and camera constants from training subset ────
+        # (Both are derived per fold so the held-out config never leaks in.)
+        p_overhead       = estimate_overhead(df_train)
+        camera_constants = estimate_camera_constants(df_train)
 
         local_payload = {
-            "stage_models": stage_models,
-            "p_overhead_w": p_overhead,
+            "stage_models":     stage_models,
+            "p_overhead_w":     p_overhead,
+            "camera_constants": camera_constants,
         }
 
         # ── Predict held-out rows ──────────────────────────────────────────────

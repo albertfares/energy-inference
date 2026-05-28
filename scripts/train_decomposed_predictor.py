@@ -438,6 +438,125 @@ def estimate_overhead(df: pd.DataFrame) -> float:
     return p_sleep
 
 
+# ── Camera constants (Phase 2: capture independence) ──────────────────────────
+
+def estimate_camera_constants(df: pd.DataFrame, threshold_ms: float = 2.0) -> dict:
+    """
+    Derive per-resolution camera characteristics that are independent of the model:
+
+      • T_camera_period_ms : minimum interval the camera+driver can deliver frames at
+                             (derived from rows where cap.read() blocked).
+      • T_decode_ms        : pure JPEG-decode latency (derived from rows where
+                             cap.read() returned immediately because a frame was
+                             already buffered).
+      • E_decode_mj        : energy of the pure decode work (same rows).
+
+    Camera-limited rows  : T_capture_observed > threshold_ms  (the read had to wait).
+                           For these, T_camera_period ≈ T_capture + T_other_stages.
+
+    Compute-limited rows : T_capture_observed < threshold_ms  (camera had a frame ready).
+                           For these, T_capture ≈ T_decode  and  E_capture ≈ E_decode.
+
+    Returns
+    -------
+    dict keyed by (width, height) → {T_camera_period_ms, T_decode_ms, E_decode_mj}
+    """
+    df = df.copy()
+    df["T_other_ms"] = (df["preprocess_lat_ms"]    + df["infer_lat_ms"]   +
+                        df["postprocess_lat_ms"])
+
+    # Use only unbounded runs to identify camera-limited vs compute-limited regimes.
+    # Throttled rows always look compute-limited because the throttle sleep buffers
+    # a fresh frame — so they're informative for T_decode but not for T_camera_period.
+    unbounded = df[df["target_fps"] == 0]
+
+    cam_limited     = unbounded[unbounded["capture_lat_ms"] >  threshold_ms].copy()
+    compute_limited = df       [df       ["capture_lat_ms"] <= threshold_ms].copy()
+
+    # Camera period: capture + other stages reconstructs the camera's frame interval
+    cam_limited["T_camera_period_ms"] = (cam_limited["capture_lat_ms"] +
+                                         cam_limited["T_other_ms"])
+
+    constants: dict = {}
+    for (w, h), _ in df.groupby(["width", "height"]):
+        cl  = cam_limited    [(cam_limited    ["width"] == w) & (cam_limited    ["height"] == h)]
+        com = compute_limited[(compute_limited["width"] == w) & (compute_limited["height"] == h)]
+
+        if not cl.empty:
+            T_cam_period = float(cl["T_camera_period_ms"].median())
+        else:
+            T_cam_period = float("nan")        # only compute-limited data → unknown
+
+        if not com.empty:
+            T_decode = float(com["capture_lat_ms"].median())
+            E_decode = float(com["capture_e_mj"].median())
+        else:
+            # Fallback: use camera-limited rows' decode-time component
+            T_decode = 0.5
+            E_decode = 9.0
+
+        constants[(int(w), int(h))] = {
+            "T_camera_period_ms": T_cam_period,
+            "T_decode_ms":        T_decode,
+            "E_decode_mj":        E_decode,
+        }
+        period_str = f"{T_cam_period:.2f}" if not np.isnan(T_cam_period) else "  n/a"
+        print(f"  Camera constants ({int(w)}x{int(h)}): "
+              f"period={period_str} ms  "
+              f"T_decode={T_decode:.2f} ms  E_decode={E_decode:.2f} mJ "
+              f"(n_cam={len(cl)}, n_compute={len(com)})")
+
+    return constants
+
+
+def compute_capture_outputs(
+    camera_constants: dict,
+    p_sleep_w: float,
+    width: int,
+    height: int,
+    target_fps: float,
+    T_other_ms: float,
+) -> tuple[float, float]:
+    """
+    Combination-layer logic for the capture stage.
+
+    At unbounded FPS:
+      • If the rest of the pipeline runs faster than the camera period, cap.read()
+        blocks for the leftover time → T_capture = camera_period - T_other.
+      • Otherwise the camera always has a frame ready → T_capture = T_decode.
+
+    At throttled FPS (target_fps > 0):
+      • The throttle sleep that occurred BEFORE this iteration's cap.read() means
+        the camera has been buffering frames during the sleep, so cap.read() returns
+        immediately → T_capture = T_decode.
+        (Holds as long as 1/target_fps ≥ T_camera_period, which is the regime we
+        sweep — both cameras here are 30 fps.)
+
+    Energy: E_capture = E_decode + P_sleep × (T_capture - T_decode), i.e. the wait
+    portion is charged at the same idle power as the throttle sleep.
+    """
+    key = (int(width), int(height))
+    cam = camera_constants.get(key)
+    if cam is None:
+        # Fall back to the first available resolution (works because we currently
+        # have only one camera setting; future resolutions will need their own).
+        cam = next(iter(camera_constants.values()))
+
+    T_decode        = float(cam["T_decode_ms"])
+    E_decode        = float(cam["E_decode_mj"])
+    T_camera_period = float(cam["T_camera_period_ms"])
+
+    if target_fps > 0 or np.isnan(T_camera_period):
+        T_capture = T_decode
+    else:
+        T_capture = max(T_decode, T_camera_period - T_other_ms)
+
+    T_capture_wait_s = max(0.0, T_capture - T_decode) / 1000.0
+    E_capture        = E_decode + p_sleep_w * T_capture_wait_s * 1000.0   # mJ
+
+    return T_capture, E_capture
+
+
 # ── Combination layer (also saved in payload for inference) ───────────────────
 
 def predict_pipeline(
@@ -508,6 +627,21 @@ def predict_pipeline(
                 results[out_key] = 0.0
             else:
                 results[out_key] = float(np.maximum(m.predict(X_pred)[0], 0.0))
+
+    # ── Phase 2: capture is computed in the combination layer ─────────────────
+    # The capture stage predictor's polynomial output is ignored; instead we
+    # use the camera_period / T_decode constants and let the combination layer
+    # decide whether the pipeline is camera-limited or compute-limited.
+    T_other_ms = (results["T_preprocess_ms"] + results["T_infer_ms"] +
+                  results["T_postprocess_ms"])
+
+    camera_constants = payload.get("camera_constants")
+    if camera_constants:
+        T_capture, E_capture = compute_capture_outputs(
+            camera_constants, p_overhead, width, height, target_fps, T_other_ms
+        )
+        results["T_capture_ms"] = T_capture
+        results["E_capture_mj"] = E_capture
 
     # Compute combined outputs
     T_compute = (results["T_capture_ms"] + results["T_preprocess_ms"] +
@@ -792,8 +926,11 @@ def main() -> None:
               f"fps={fps_vals.mean():.1f}  "
               f"E/frame={e_vals.mean():.0f}mJ")
 
-    # 2. Estimate overhead
+    # 2. Estimate overhead and camera constants
     p_overhead = estimate_overhead(df)
+
+    print("\n── Camera constants (Phase 2: capture independence) ───────")
+    camera_constants = estimate_camera_constants(df)
 
     stage_col_map = {
         "capture":    ("capture_lat_ms",    "capture_e_mj"),
@@ -847,14 +984,15 @@ def main() -> None:
 
     # 5. Save payload
     payload = {
-        "stage_models":   stage_models,
-        "stage_col_map":  stage_col_map,
-        "feature_fns":    feature_fns,
-        "p_overhead_w":   p_overhead,
-        "model_labels":   MODEL_LABELS,
-        "model_family":   MODEL_FAMILY,
-        "cv_summary":     summary,
-        "timestamp":      TIMESTAMP,
+        "stage_models":      stage_models,
+        "stage_col_map":     stage_col_map,
+        "feature_fns":       feature_fns,
+        "p_overhead_w":      p_overhead,
+        "camera_constants":  camera_constants,
+        "model_labels":      MODEL_LABELS,
+        "model_family":      MODEL_FAMILY,
+        "cv_summary":        summary,
+        "timestamp":         TIMESTAMP,
     }
     MODEL_SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(payload, MODEL_SAVE_PATH)
