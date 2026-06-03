@@ -182,13 +182,25 @@ def train_capture_brick(csv_path: Path) -> dict:
         unbounded = g[g["target_fps"] == 0]
         throttled = g[g["target_fps"] > 0]
 
+        # Only rows whose requested FPS is at or below what the camera can
+        # actually deliver are genuine decode measurements. If target_fps >
+        # driver_fps the throttle never engages: cap.read() still blocks on the
+        # sensor, so the latency is the camera PERIOD (~99 ms), not the ~1 ms
+        # buffered decode. Including those would poison T_decode.
+        if not throttled.empty and "driver_fps" in throttled.columns:
+            effective = throttled[throttled["target_fps"] <= throttled["driver_fps"]]
+            if effective.empty:  # nothing throttled below the sensor cap
+                effective = throttled
+        else:
+            effective = throttled
+
         T_period = (float(unbounded["capture_lat_mean_ms"].median())
                     if not unbounded.empty else float("nan"))
-        if not throttled.empty:
-            T_decode = float(throttled["capture_lat_mean_ms"].median())
-            E_decode = float(throttled["capture_energy_mj_per_iter"].median())
-            # Highest FPS cap → smallest duty cycle → mean power closest to idle.
-            most_throttled = throttled.sort_values("target_fps").iloc[0]
+        if not effective.empty:
+            T_decode = float(effective["capture_lat_mean_ms"].median())
+            E_decode = float(effective["capture_energy_mj_per_iter"].median())
+            # Lowest FPS cap → longest sleep fraction → mean power closest to idle.
+            most_throttled = effective.sort_values("target_fps").iloc[0]
             sleep_powers.append(float(most_throttled["mean_power_w"]))
         else:
             T_decode, E_decode = 0.5, 9.0  # conservative fallback
@@ -261,7 +273,6 @@ def compute_capture_outputs(
     if cam is None:
         cam = next(iter(camera_constants.values()))
     T_decode = float(cam["T_decode_ms"])
-    E_decode = float(cam["E_decode_mj"])
     T_period = float(cam["T_camera_period_ms"])
 
     if target_fps > 0 or np.isnan(T_period):
@@ -269,8 +280,12 @@ def compute_capture_outputs(
     else:
         T_capture = max(T_decode, T_period - T_other_ms)
 
-    wait_s = max(0.0, T_capture - T_decode) / 1000.0
-    E_capture = E_decode + p_sleep_w * wait_s * 1000.0
+    # Capture energy = board power × time the stage occupies, consistent with how
+    # every other brick attributes energy. The decode is a cheap buffered read and
+    # any camera-limited wait is idle, so both run at ≈ p_sleep. (We deliberately do
+    # NOT use the throttled rows' per-iter energy as a "decode energy": that number
+    # is dominated by inter-frame sleep and depends on the arbitrary fps sweep.)
+    E_capture = p_sleep_w * T_capture  # W × ms = mJ
     return T_capture, E_capture
 
 
